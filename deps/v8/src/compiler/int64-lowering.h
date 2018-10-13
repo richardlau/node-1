@@ -9,13 +9,18 @@
 #include "src/compiler/graph.h"
 #include "src/compiler/machine-operator.h"
 #include "src/compiler/node-marker.h"
-#include "src/zone-containers.h"
+#include "src/globals.h"
+#include "src/zone/zone-containers.h"
 
 namespace v8 {
 namespace internal {
+
+template <typename T>
+class Signature;
+
 namespace compiler {
 
-class Int64Lowering {
+class V8_EXPORT_PRIVATE Int64Lowering {
  public:
   Int64Lowering(Graph* graph, MachineOperatorBuilder* machine,
                 CommonOperatorBuilder* common, Zone* zone,
@@ -25,9 +30,6 @@ class Int64Lowering {
 
   static int GetParameterCountAfterLowering(
       Signature<MachineRepresentation>* signature);
-
-  static const int kLowerWordOffset;
-  static const int kHigherWordOffset;
 
  private:
   enum class State : uint8_t { kUnvisited, kOnStack, kVisited };
@@ -43,13 +45,13 @@ class Int64Lowering {
   CommonOperatorBuilder* common() const { return common_; }
   Signature<MachineRepresentation>* signature() const { return signature_; }
 
-  void PrepareReplacements(Node* node);
   void PushNode(Node* node);
   void LowerNode(Node* node);
-  bool DefaultLowering(Node* node);
+  bool DefaultLowering(Node* node, bool low_word_only = false);
   void LowerComparison(Node* node, const Operator* signed_op,
                        const Operator* unsigned_op);
-  void PrepareProjectionReplacements(Node* node);
+  void LowerWord64AtomicBinop(Node* node, const Operator* op);
+  void LowerWord64AtomicNarrowOp(Node* node, const Operator* op);
 
   void ReplaceNode(Node* old, Node* new_low, Node* new_high);
   bool HasReplacementLow(Node* node);
@@ -58,6 +60,7 @@ class Int64Lowering {
   Node* GetReplacementHigh(Node* node);
   void PreparePhiReplacement(Node* phi);
   void GetIndexNodes(Node* index, Node*& index_low, Node*& index_high);
+  void ReplaceNodeWithProjections(Node* node);
 
   struct NodeState {
     Node* node;

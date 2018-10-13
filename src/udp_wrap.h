@@ -1,13 +1,32 @@
+// Copyright Joyent, Inc. and other Node contributors.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 #ifndef SRC_UDP_WRAP_H_
 #define SRC_UDP_WRAP_H_
 
 #if defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
 
-#include "async-wrap.h"
+#include "async_wrap.h"
 #include "env.h"
 #include "handle_wrap.h"
-#include "req-wrap.h"
-#include "req-wrap-inl.h"
 #include "uv.h"
 #include "v8.h"
 
@@ -15,12 +34,15 @@ namespace node {
 
 class UDPWrap: public HandleWrap {
  public:
+  enum SocketType {
+    SOCKET
+  };
   static void Initialize(v8::Local<v8::Object> target,
                          v8::Local<v8::Value> unused,
                          v8::Local<v8::Context> context);
-  static void GetFD(v8::Local<v8::String>,
-                    const v8::PropertyCallbackInfo<v8::Value>&);
+  static void GetFD(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void New(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void Open(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void Bind(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void Send(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void Bind6(const v8::FunctionCallbackInfo<v8::Value>& args);
@@ -29,16 +51,23 @@ class UDPWrap: public HandleWrap {
   static void RecvStop(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void AddMembership(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void DropMembership(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void SetMulticastInterface(
+      const v8::FunctionCallbackInfo<v8::Value>& args);
   static void SetMulticastTTL(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void SetMulticastLoopback(
       const v8::FunctionCallbackInfo<v8::Value>& args);
   static void SetBroadcast(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void SetTTL(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void BufferSize(const v8::FunctionCallbackInfo<v8::Value>& args);
 
-  static v8::Local<v8::Object> Instantiate(Environment* env, AsyncWrap* parent);
+  static v8::Local<v8::Object> Instantiate(Environment* env,
+                                           AsyncWrap* parent,
+                                           SocketType type);
   uv_udp_t* UVHandle();
 
-  size_t self_size() const override { return sizeof(*this); }
+  SET_NO_MEMORY_INFO()
+  SET_MEMORY_INFO_NAME(UDPWrap)
+  SET_SELF_SIZE(UDPWrap)
 
  private:
   typedef uv_udp_t HandleType;
@@ -47,7 +76,7 @@ class UDPWrap: public HandleWrap {
             int (*F)(const typename T::HandleType*, sockaddr*, int*)>
   friend void GetSockOrPeerName(const v8::FunctionCallbackInfo<v8::Value>&);
 
-  UDPWrap(Environment* env, v8::Local<v8::Object> object, AsyncWrap* parent);
+  UDPWrap(Environment* env, v8::Local<v8::Object> object);
 
   static void DoBind(const v8::FunctionCallbackInfo<v8::Value>& args,
                      int family);

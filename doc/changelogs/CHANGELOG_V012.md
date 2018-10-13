@@ -1,4 +1,7 @@
-# Node.js v0.12 ChangeLog
+# Node.js 0.12 ChangeLog
+
+<!--lint disable prohibited-strings-->
+<!--lint disable maximum-line-length-->
 
 <table>
 <tr>
@@ -6,6 +9,7 @@
 </tr>
 <tr>
 <td>
+<a href="#0.12.18">0.12.18</a><br/>
 <a href="#0.12.17">0.12.17</a><br/>
 <a href="#0.12.16">0.12.16</a><br/>
 <a href="#0.12.15">0.12.15</a><br/>
@@ -29,6 +33,10 @@
 </table>
 
 * Other Versions
+  * [10.x](CHANGELOG_V10.md)
+  * [9.x](CHANGELOG_V9.md)
+  * [8.x](CHANGELOG_V8.md)
+  * [7.x](CHANGELOG_V7.md)
   * [6.x](CHANGELOG_V6.md)
   * [5.x](CHANGELOG_V5.md)
   * [4.x](CHANGELOG_V4.md)
@@ -36,9 +44,27 @@
   * [io.js](CHANGELOG_IOJS.md)
   * [Archive](CHANGELOG_ARCHIVE.md)
 
-**Note:** Node.js v0.12 is covered by the 
+*Note*: Node.js v0.12 is covered by the
 [Node.js Long Term Support Plan](https://github.com/nodejs/LTS) and
 will be maintained until December 31st, 2016.
+
+<a id="0.12.18"></a>
+## 2016-12-21, Version 0.12.18 (Maintenance), @rvagg
+
+### Notable changes:
+
+* npm: upgrade from v2.15.1 to v2.15.11, including accurate updated license (Jeremiah Senkpiel)
+* process: `process.versions.ares` now outputs the c-ares version (Johan Bergström)
+
+### Commits:
+
+* [a47fd4549d] - build: add working lint-ci make target (Rod Vagg) https://github.com/nodejs/node/pull/9151
+* [830584ca59] - deps: define missing operator delete functions (John Barboza) https://github.com/nodejs/node/pull/10356
+* [c130b31cba] - deps: upgrade npm to 2.15.11 (Jeremiah Senkpiel) https://github.com/nodejs/node/pull/9619
+* [bc6766d847] - doc: update npm license in main LICENSE file (Rod Vagg) https://github.com/nodejs/node/pull/10352
+* [0cdf344c80] - (SEMVER-MINOR) process: reintroduce ares to versions (Johan Bergström) https://github.com/nodejs/node/pull/9191
+* [d8e27ec30a] - test: mark dgram-multicast-multi-process as flaky (Rod Vagg) https://github.com/nodejs/node/pull/9150
+* [c722335ead] - tls: fix minor jslint failure (Rod Vagg) https://github.com/nodejs/node/pull/9107
 
 <a id="0.12.17"></a>
 ## 2016-10-18, Version 0.12.17 (Maintenance), @rvagg

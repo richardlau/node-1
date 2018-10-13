@@ -4,7 +4,6 @@ var test = require('tap').test
 var Tacks = require('tacks')
 var File = Tacks.File
 var Dir = Tacks.Dir
-var extend = Object.assign || require('util')._extend
 var common = require('../common-tap.js')
 
 var basedir = path.join(__dirname, path.basename(__filename, '.js'))
@@ -15,7 +14,7 @@ var tmpdir = path.join(basedir, 'tmp')
 
 var conf = {
   cwd: testdir,
-  env: extend(extend({}, process.env), {
+  env: Object.assign({}, process.env, {
     npm_config_cache: cachedir,
     npm_config_tmp: tmpdir,
     npm_config_prefix: globaldir,
@@ -33,9 +32,18 @@ var fixture = new Tacks(Dir({
       'package.json': File({
         name: 'mod1',
         version: '1.0.0',
-        scripts: {
-
+        scripts: {},
+        'optionalDependencies': {
+          'mod2': 'file:../mod2'
         },
+        os: ['nosuchos']
+      })
+    }),
+    mod2: Dir({
+      'package.json': File({
+        name: 'mod2',
+        version: '1.0.0',
+        scripts: {},
         os: ['nosuchos']
       })
     }),
@@ -45,8 +53,12 @@ var fixture = new Tacks(Dir({
       dependencies: {
         mod1: {
           version: '1.0.0',
-          from: 'mod1',
           resolved: 'file:mod1',
+          optional: true
+        },
+        mod2: {
+          version: '1.0.0',
+          resolved: 'file:mod2',
           optional: true
         }
       }
@@ -93,4 +105,3 @@ test('cleanup', function (t) {
   cleanup()
   t.done()
 })
-

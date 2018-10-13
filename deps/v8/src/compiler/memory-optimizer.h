@@ -5,7 +5,8 @@
 #ifndef V8_COMPILER_MEMORY_OPTIMIZER_H_
 #define V8_COMPILER_MEMORY_OPTIMIZER_H_
 
-#include "src/zone-containers.h"
+#include "src/compiler/graph-assembler.h"
+#include "src/zone/zone-containers.h"
 
 namespace v8 {
 namespace internal {
@@ -30,7 +31,11 @@ typedef uint32_t NodeId;
 // implicitly.
 class MemoryOptimizer final {
  public:
-  MemoryOptimizer(JSGraph* jsgraph, Zone* zone);
+  enum class AllocationFolding { kDoAllocationFolding, kDontAllocationFolding };
+
+  MemoryOptimizer(JSGraph* jsgraph, Zone* zone,
+                  PoisoningMitigationLevel poisoning_level,
+                  AllocationFolding allocation_folding);
   ~MemoryOptimizer() {}
 
   void Optimize();
@@ -105,8 +110,9 @@ class MemoryOptimizer final {
   };
 
   void VisitNode(Node*, AllocationState const*);
-  void VisitAllocate(Node*, AllocationState const*);
+  void VisitAllocateRaw(Node*, AllocationState const*);
   void VisitCall(Node*, AllocationState const*);
+  void VisitCallWithCallerSavedRegisters(Node*, AllocationState const*);
   void VisitLoadElement(Node*, AllocationState const*);
   void VisitLoadField(Node*, AllocationState const*);
   void VisitStoreElement(Node*, AllocationState const*);
@@ -124,6 +130,8 @@ class MemoryOptimizer final {
   void EnqueueUses(Node*, AllocationState const*);
   void EnqueueUse(Node*, int, AllocationState const*);
 
+  bool NeedsPoisoning(LoadSensitivity load_sensitivity) const;
+
   AllocationState const* empty_state() const { return empty_state_; }
   Graph* graph() const;
   Isolate* isolate() const;
@@ -131,6 +139,7 @@ class MemoryOptimizer final {
   CommonOperatorBuilder* common() const;
   MachineOperatorBuilder* machine() const;
   Zone* zone() const { return zone_; }
+  GraphAssembler* gasm() { return &graph_assembler_; }
 
   SetOncePointer<const Operator> allocate_operator_;
   JSGraph* const jsgraph_;
@@ -138,6 +147,9 @@ class MemoryOptimizer final {
   ZoneMap<NodeId, AllocationStates> pending_;
   ZoneQueue<Token> tokens_;
   Zone* const zone_;
+  GraphAssembler graph_assembler_;
+  PoisoningMitigationLevel poisoning_level_;
+  AllocationFolding allocation_folding_;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(MemoryOptimizer);
 };

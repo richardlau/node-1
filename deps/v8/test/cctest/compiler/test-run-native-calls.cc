@@ -7,6 +7,7 @@
 #include "src/compiler/linkage.h"
 #include "src/compiler/raw-machine-assembler.h"
 #include "src/machine-type.h"
+#include "src/objects-inl.h"
 #include "src/register-configuration.h"
 
 #include "test/cctest/cctest.h"
@@ -17,8 +18,9 @@
 namespace v8 {
 namespace internal {
 namespace compiler {
+namespace test_run_native_calls {
 
-const auto GetRegConfig = RegisterConfiguration::Turbofan;
+const auto GetRegConfig = RegisterConfiguration::Default;
 
 namespace {
 typedef float float32;
@@ -87,8 +89,16 @@ class RegisterPairs : public Pairs {
 class Float32RegisterPairs : public Pairs {
  public:
   Float32RegisterPairs()
-      : Pairs(100, GetRegConfig()->num_allocatable_aliased_double_registers(),
-              GetRegConfig()->allocatable_double_codes()) {}
+      : Pairs(
+            100,
+#if V8_TARGET_ARCH_ARM
+            // TODO(bbudge) Modify wasm linkage to allow use of all float regs.
+            GetRegConfig()->num_allocatable_double_registers() / 2 - 2,
+#else
+            GetRegConfig()->num_allocatable_double_registers(),
+#endif
+            GetRegConfig()->allocatable_double_codes()) {
+  }
 };
 
 
@@ -127,6 +137,10 @@ struct Allocator {
       // Allocate a floating point register/stack location.
       if (fp_offset < fp_count) {
         int code = fp_regs[fp_offset++];
+#if V8_TARGET_ARCH_ARM
+        // TODO(bbudge) Modify wasm linkage to allow use of all float regs.
+        if (type.representation() == MachineRepresentation::kFloat32) code *= 2;
+#endif
         return LinkageLocation::ForRegister(code, type);
       } else {
         int offset = -1 - stack_offset;
@@ -193,7 +207,7 @@ class RegisterConfig {
         compiler::Operator::kNoProperties,  // properties
         kCalleeSaveRegisters,               // callee-saved registers
         kCalleeSaveFPRegisters,             // callee-saved fp regs
-        CallDescriptor::kUseNativeStack,    // flags
+        CallDescriptor::kNoFlags,           // flags
         "c-call");
   }
 
@@ -234,31 +248,32 @@ class Int32Signature : public MachineSignature {
  public:
   explicit Int32Signature(int param_count)
       : MachineSignature(1, param_count, kIntTypes) {
-    CHECK(param_count <= kMaxParamCount);
+    CHECK_GE(kMaxParamCount, param_count);
   }
 };
 
-
-Handle<Code> CompileGraph(const char* name, CallDescriptor* desc, Graph* graph,
-                          Schedule* schedule = nullptr) {
+Handle<Code> CompileGraph(const char* name, CallDescriptor* call_descriptor,
+                          Graph* graph, Schedule* schedule = nullptr) {
   Isolate* isolate = CcTest::InitIsolateOnce();
-  CompilationInfo info(ArrayVector("testing"), isolate, graph->zone());
-  Handle<Code> code =
-      Pipeline::GenerateCodeForTesting(&info, desc, graph, schedule);
-  CHECK(!code.is_null());
+  OptimizedCompilationInfo info(ArrayVector("testing"), graph->zone(),
+                                Code::STUB);
+  Handle<Code> code = Pipeline::GenerateCodeForTesting(
+                          &info, isolate, call_descriptor, graph,
+                          AssemblerOptions::Default(isolate), schedule)
+                          .ToHandleChecked();
 #ifdef ENABLE_DISASSEMBLER
   if (FLAG_print_opt_code) {
-    OFStream os(stdout);
+    StdoutStream os;
     code->Disassemble(name, os);
   }
 #endif
   return code;
 }
 
-
-Handle<Code> WrapWithCFunction(Handle<Code> inner, CallDescriptor* desc) {
-  Zone zone(inner->GetIsolate()->allocator());
-  int param_count = static_cast<int>(desc->ParameterCount());
+Handle<Code> WrapWithCFunction(Handle<Code> inner,
+                               CallDescriptor* call_descriptor) {
+  Zone zone(inner->GetIsolate()->allocator(), ZONE_NAME);
+  int param_count = static_cast<int>(call_descriptor->ParameterCount());
   GraphAndBuilders caller(&zone);
   {
     GraphAndBuilders& b = caller;
@@ -278,13 +293,15 @@ Handle<Code> WrapWithCFunction(Handle<Code> inner, CallDescriptor* desc) {
     args[index++] = start;  // control.
 
     // Build the call and return nodes.
-    Node* call =
-        b.graph()->NewNode(b.common()->Call(desc), param_count + 3, args);
-    Node* ret = b.graph()->NewNode(b.common()->Return(), call, call, start);
+    Node* call = b.graph()->NewNode(b.common()->Call(call_descriptor),
+                                    param_count + 3, args);
+    Node* zero = b.graph()->NewNode(b.common()->Int32Constant(0));
+    Node* ret =
+        b.graph()->NewNode(b.common()->Return(), zero, call, call, start);
     b.graph()->SetEnd(ret);
   }
 
-  MachineSignature* msig = desc->GetMachineSignature(&zone);
+  MachineSignature* msig = call_descriptor->GetMachineSignature(&zone);
   CallDescriptor* cdesc = Linkage::GetSimplifiedCDescriptor(&zone, msig);
 
   return CompileGraph("wrapper", cdesc, caller.graph());
@@ -307,7 +324,7 @@ class ArgsBuffer {
    public:
     explicit Sig(int param_count)
         : MachineSignature(1, param_count, MachTypes()) {
-      CHECK(param_count <= kMaxParamCount);
+      CHECK_GE(kMaxParamCount, param_count);
     }
   };
 
@@ -403,9 +420,8 @@ void ArgsBuffer<float64>::Mutate() {
   seed_++;
 }
 
-
-int ParamCount(CallDescriptor* desc) {
-  return static_cast<int>(desc->ParameterCount());
+int ParamCount(CallDescriptor* call_descriptor) {
+  return static_cast<int>(call_descriptor->ParameterCount());
 }
 
 
@@ -423,14 +439,14 @@ class Computer {
     Handle<Code> inner = Handle<Code>::null();
     {
       // Build the graph for the computation.
-      Zone zone(isolate->allocator());
+      Zone zone(isolate->allocator(), ZONE_NAME);
       Graph graph(&zone);
       RawMachineAssembler raw(isolate, &graph, desc);
       build(desc, raw);
       inner = CompileGraph("Compute", desc, &graph, raw.Export());
     }
 
-    CSignature0<int32_t> csig;
+    CSignatureOf<int32_t> csig;
     ArgsBuffer<CType> io(num_params, seed);
 
     {
@@ -438,17 +454,19 @@ class Computer {
       Handle<Code> wrapper = Handle<Code>::null();
       {
         // Wrap the above code with a callable function that passes constants.
-        Zone zone(isolate->allocator());
+        Zone zone(isolate->allocator(), ZONE_NAME);
         Graph graph(&zone);
         CallDescriptor* cdesc = Linkage::GetSimplifiedCDescriptor(&zone, &csig);
         RawMachineAssembler raw(isolate, &graph, cdesc);
         Node* target = raw.HeapConstant(inner);
-        Node** args = zone.NewArray<Node*>(num_params);
+        Node** inputs = zone.NewArray<Node*>(num_params + 1);
+        int input_count = 0;
+        inputs[input_count++] = target;
         for (int i = 0; i < num_params; i++) {
-          args[i] = io.MakeConstant(raw, io.input[i]);
+          inputs[input_count++] = io.MakeConstant(raw, io.input[i]);
         }
 
-        Node* call = raw.CallN(desc, target, args);
+        Node* call = raw.CallN(desc, input_count, inputs);
         Node* store = io.StoreOutput(raw, call);
         USE(store);
         raw.Return(raw.Int32Constant(seed));
@@ -470,18 +488,20 @@ class Computer {
       Handle<Code> wrapper = Handle<Code>::null();
       {
         // Wrap the above code with a callable function that loads from {input}.
-        Zone zone(isolate->allocator());
+        Zone zone(isolate->allocator(), ZONE_NAME);
         Graph graph(&zone);
         CallDescriptor* cdesc = Linkage::GetSimplifiedCDescriptor(&zone, &csig);
         RawMachineAssembler raw(isolate, &graph, cdesc);
         Node* base = raw.PointerConstant(io.input);
         Node* target = raw.HeapConstant(inner);
-        Node** args = zone.NewArray<Node*>(kMaxParamCount);
+        Node** inputs = zone.NewArray<Node*>(kMaxParamCount + 1);
+        int input_count = 0;
+        inputs[input_count++] = target;
         for (int i = 0; i < num_params; i++) {
-          args[i] = io.LoadInput(raw, base, i);
+          inputs[input_count++] = io.LoadInput(raw, base, i);
         }
 
-        Node* call = raw.CallN(desc, target, args);
+        Node* call = raw.CallN(desc, input_count, inputs);
         Node* store = io.StoreOutput(raw, call);
         USE(store);
         raw.Return(raw.Int32Constant(seed));
@@ -508,7 +528,7 @@ class Computer {
 static void TestInt32Sub(CallDescriptor* desc) {
   Isolate* isolate = CcTest::InitIsolateOnce();
   HandleScope scope(isolate);
-  Zone zone(isolate->allocator());
+  Zone zone(isolate->allocator(), ZONE_NAME);
   GraphAndBuilders inner(&zone);
   {
     // Build the add function.
@@ -518,7 +538,9 @@ static void TestInt32Sub(CallDescriptor* desc) {
     Node* p0 = b.graph()->NewNode(b.common()->Parameter(0), start);
     Node* p1 = b.graph()->NewNode(b.common()->Parameter(1), start);
     Node* add = b.graph()->NewNode(b.machine()->Int32Sub(), p0, p1);
-    Node* ret = b.graph()->NewNode(b.common()->Return(), add, start, start);
+    Node* zero = b.graph()->NewNode(b.common()->Int32Constant(0));
+    Node* ret =
+        b.graph()->NewNode(b.common()->Return(), zero, add, start, start);
     b.graph()->SetEnd(ret);
   }
 
@@ -548,7 +570,7 @@ static void CopyTwentyInt32(CallDescriptor* desc) {
   Handle<Code> inner = Handle<Code>::null();
   {
     // Writes all parameters into the output buffer.
-    Zone zone(isolate->allocator());
+    Zone zone(isolate->allocator(), ZONE_NAME);
     Graph graph(&zone);
     RawMachineAssembler raw(isolate, &graph, desc);
     Node* base = raw.PointerConstant(output);
@@ -561,23 +583,25 @@ static void CopyTwentyInt32(CallDescriptor* desc) {
     inner = CompileGraph("CopyTwentyInt32", desc, &graph, raw.Export());
   }
 
-  CSignature0<int32_t> csig;
+  CSignatureOf<int32_t> csig;
   Handle<Code> wrapper = Handle<Code>::null();
   {
     // Loads parameters from the input buffer and calls the above code.
-    Zone zone(isolate->allocator());
+    Zone zone(isolate->allocator(), ZONE_NAME);
     Graph graph(&zone);
     CallDescriptor* cdesc = Linkage::GetSimplifiedCDescriptor(&zone, &csig);
     RawMachineAssembler raw(isolate, &graph, cdesc);
     Node* base = raw.PointerConstant(input);
     Node* target = raw.HeapConstant(inner);
-    Node** args = zone.NewArray<Node*>(kNumParams);
+    Node** inputs = zone.NewArray<Node*>(kNumParams + 1);
+    int input_count = 0;
+    inputs[input_count++] = target;
     for (int i = 0; i < kNumParams; i++) {
       Node* offset = raw.Int32Constant(i * sizeof(int32_t));
-      args[i] = raw.Load(MachineType::Int32(), base, offset);
+      inputs[input_count++] = raw.Load(MachineType::Int32(), base, offset);
     }
 
-    Node* call = raw.CallN(desc, target, args);
+    Node* call = raw.CallN(desc, input_count, inputs);
     raw.Return(call);
     wrapper =
         CompileGraph("CopyTwentyInt32-wrapper", cdesc, &graph, raw.Export());
@@ -604,8 +628,8 @@ static void CopyTwentyInt32(CallDescriptor* desc) {
 
 static void Test_RunInt32SubWithRet(int retreg) {
   Int32Signature sig(2);
-  base::AccountingAllocator allocator;
-  Zone zone(&allocator);
+  v8::internal::AccountingAllocator allocator;
+  Zone zone(&allocator, ZONE_NAME);
   RegisterPairs pairs;
   while (pairs.More()) {
     int parray[2];
@@ -614,8 +638,7 @@ static void Test_RunInt32SubWithRet(int retreg) {
     Allocator params(parray, 2, nullptr, 0);
     Allocator rets(rarray, 1, nullptr, 0);
     RegisterConfig config(params, rets);
-    CallDescriptor* desc = config.Create(&zone, &sig);
-    TestInt32Sub(desc);
+    TestInt32Sub(config.Create(&zone, &sig));
   }
 }
 
@@ -655,16 +678,15 @@ TEST(Run_Int32Sub_all_allocatable_single) {
   Int32Signature sig(2);
   RegisterPairs pairs;
   while (pairs.More()) {
-    base::AccountingAllocator allocator;
-    Zone zone(&allocator);
+    v8::internal::AccountingAllocator allocator;
+    Zone zone(&allocator, ZONE_NAME);
     int parray[1];
     int rarray[1];
     pairs.Next(&rarray[0], &parray[0], true);
     Allocator params(parray, 1, nullptr, 0);
     Allocator rets(rarray, 1, nullptr, 0);
     RegisterConfig config(params, rets);
-    CallDescriptor* desc = config.Create(&zone, &sig);
-    TestInt32Sub(desc);
+    TestInt32Sub(config.Create(&zone, &sig));
   }
 }
 
@@ -673,16 +695,15 @@ TEST(Run_CopyTwentyInt32_all_allocatable_pairs) {
   Int32Signature sig(20);
   RegisterPairs pairs;
   while (pairs.More()) {
-    base::AccountingAllocator allocator;
-    Zone zone(&allocator);
+    v8::internal::AccountingAllocator allocator;
+    Zone zone(&allocator, ZONE_NAME);
     int parray[2];
     int rarray[] = {GetRegConfig()->GetAllocatableGeneralCode(0)};
     pairs.Next(&parray[0], &parray[1], false);
     Allocator params(parray, 2, nullptr, 0);
     Allocator rets(rarray, 1, nullptr, 0);
     RegisterConfig config(params, rets);
-    CallDescriptor* desc = config.Create(&zone, &sig);
-    CopyTwentyInt32(desc);
+    CopyTwentyInt32(config.Create(&zone, &sig));
   }
 }
 
@@ -724,8 +745,8 @@ static void Test_Int32_WeightedSum_of_size(int count) {
   Int32Signature sig(count);
   for (int p0 = 0; p0 < Register::kNumRegisters; p0++) {
     if (GetRegConfig()->IsAllocatableGeneralCode(p0)) {
-      base::AccountingAllocator allocator;
-      Zone zone(&allocator);
+      v8::internal::AccountingAllocator allocator;
+      Zone zone(&allocator, ZONE_NAME);
 
       int parray[] = {p0};
       int rarray[] = {GetRegConfig()->GetAllocatableGeneralCode(0)};
@@ -787,8 +808,8 @@ void Test_Int32_Select() {
   Allocator rets(rarray, 1, nullptr, 0);
   RegisterConfig config(params, rets);
 
-  base::AccountingAllocator allocator;
-  Zone zone(&allocator);
+  v8::internal::AccountingAllocator allocator;
+  Zone zone(&allocator, ZONE_NAME);
 
   for (int i = which + 1; i <= 64; i++) {
     Int32Signature sig(i);
@@ -826,8 +847,8 @@ TEST(Int64Select_registers) {
   ArgsBuffer<int64_t>::Sig sig(2);
 
   RegisterPairs pairs;
-  base::AccountingAllocator allocator;
-  Zone zone(&allocator);
+  v8::internal::AccountingAllocator allocator;
+  Zone zone(&allocator, ZONE_NAME);
   while (pairs.More()) {
     int parray[2];
     pairs.Next(&parray[0], &parray[1], false);
@@ -851,8 +872,8 @@ TEST(Float32Select_registers) {
   ArgsBuffer<float32>::Sig sig(2);
 
   Float32RegisterPairs pairs;
-  base::AccountingAllocator allocator;
-  Zone zone(&allocator);
+  v8::internal::AccountingAllocator allocator;
+  Zone zone(&allocator, ZONE_NAME);
   while (pairs.More()) {
     int parray[2];
     pairs.Next(&parray[0], &parray[1], false);
@@ -874,8 +895,8 @@ TEST(Float64Select_registers) {
   ArgsBuffer<float64>::Sig sig(2);
 
   Float64RegisterPairs pairs;
-  base::AccountingAllocator allocator;
-  Zone zone(&allocator);
+  v8::internal::AccountingAllocator allocator;
+  Zone zone(&allocator, ZONE_NAME);
   while (pairs.More()) {
     int parray[2];
     pairs.Next(&parray[0], &parray[1], false);
@@ -896,8 +917,8 @@ TEST(Float32Select_stack_params_return_reg) {
   Allocator rets(nullptr, 0, rarray, 1);
   RegisterConfig config(params, rets);
 
-  base::AccountingAllocator allocator;
-  Zone zone(&allocator);
+  v8::internal::AccountingAllocator allocator;
+  Zone zone(&allocator, ZONE_NAME);
   for (int count = 1; count < 6; count++) {
     ArgsBuffer<float32>::Sig sig(count);
     CallDescriptor* desc = config.Create(&zone, &sig);
@@ -917,8 +938,8 @@ TEST(Float64Select_stack_params_return_reg) {
   Allocator rets(nullptr, 0, rarray, 1);
   RegisterConfig config(params, rets);
 
-  base::AccountingAllocator allocator;
-  Zone zone(&allocator);
+  v8::internal::AccountingAllocator allocator;
+  Zone zone(&allocator, ZONE_NAME);
   for (int count = 1; count < 6; count++) {
     ArgsBuffer<float64>::Sig sig(count);
     CallDescriptor* desc = config.Create(&zone, &sig);
@@ -941,7 +962,7 @@ static void Build_Select_With_Call(CallDescriptor* desc,
   {
     Isolate* isolate = CcTest::InitIsolateOnce();
     // Build the actual select.
-    Zone zone(isolate->allocator());
+    Zone zone(isolate->allocator(), ZONE_NAME);
     Graph graph(&zone);
     RawMachineAssembler raw(isolate, &graph, desc);
     raw.Return(raw.Parameter(which));
@@ -953,12 +974,14 @@ static void Build_Select_With_Call(CallDescriptor* desc,
   {
     // Build a call to the function that does the select.
     Node* target = raw.HeapConstant(inner);
-    Node** args = raw.zone()->NewArray<Node*>(num_params);
+    Node** inputs = raw.zone()->NewArray<Node*>(num_params + 1);
+    int input_count = 0;
+    inputs[input_count++] = target;
     for (int i = 0; i < num_params; i++) {
-      args[i] = raw.Parameter(i);
+      inputs[input_count++] = raw.Parameter(i);
     }
 
-    Node* call = raw.CallN(desc, target, args);
+    Node* call = raw.CallN(desc, input_count, inputs);
     raw.Return(call);
   }
 }
@@ -969,8 +992,8 @@ TEST(Float64StackParamsToStackParams) {
   Allocator params(nullptr, 0, nullptr, 0);
   Allocator rets(nullptr, 0, rarray, 1);
 
-  base::AccountingAllocator allocator;
-  Zone zone(&allocator);
+  v8::internal::AccountingAllocator allocator;
+  Zone zone(&allocator, ZONE_NAME);
   ArgsBuffer<float64>::Sig sig(2);
   RegisterConfig config(params, rets);
   CallDescriptor* desc = config.Create(&zone, &sig);
@@ -1024,8 +1047,8 @@ void MixedParamTest(int start) {
   RegisterConfig config(palloc, ralloc);
 
   for (int which = 0; which < num_params; which++) {
-    base::AccountingAllocator allocator;
-    Zone zone(&allocator);
+    v8::internal::AccountingAllocator allocator;
+    Zone zone(&allocator, ZONE_NAME);
     HandleScope scope(isolate);
     MachineSignature::Builder builder(&zone, 1, num_params);
     builder.AddReturn(params[which]);
@@ -1036,7 +1059,7 @@ void MixedParamTest(int start) {
     Handle<Code> select;
     {
       // build the select.
-      Zone zone(&allocator);
+      Zone zone(&allocator, ZONE_NAME);
       Graph graph(&zone);
       RawMachineAssembler raw(isolate, &graph, desc);
       raw.Return(raw.Parameter(which));
@@ -1050,15 +1073,17 @@ void MixedParamTest(int start) {
       char bytes[kDoubleSize];
       V8_ALIGNED(8) char output[kDoubleSize];
       int expected_size = 0;
-      CSignature0<int32_t> csig;
+      CSignatureOf<int32_t> csig;
       {
         // Wrap the select code with a callable function that passes constants.
-        Zone zone(&allocator);
+        Zone zone(&allocator, ZONE_NAME);
         Graph graph(&zone);
         CallDescriptor* cdesc = Linkage::GetSimplifiedCDescriptor(&zone, &csig);
         RawMachineAssembler raw(isolate, &graph, cdesc);
         Node* target = raw.HeapConstant(select);
-        Node** args = zone.NewArray<Node*>(num_params);
+        Node** inputs = zone.NewArray<Node*>(num_params + 1);
+        int input_count = 0;
+        inputs[input_count++] = target;
         int64_t constant = 0x0102030405060708;
         for (int i = 0; i < num_params; i++) {
           MachineType param_type = sig->GetParam(i);
@@ -1085,11 +1110,11 @@ void MixedParamTest(int start) {
           }
           CHECK_NOT_NULL(konst);
 
-          args[i] = konst;
+          inputs[input_count++] = konst;
           constant += 0x1010101010101010;
         }
 
-        Node* call = raw.CallN(desc, target, args);
+        Node* call = raw.CallN(desc, input_count, inputs);
         Node* store =
             raw.StoreToPointer(output, sig->GetReturn().representation(), call);
         USE(store);
@@ -1134,7 +1159,7 @@ void TestStackSlot(MachineType slot_type, T expected) {
   Allocator ralloc(rarray_gp, 1, rarray_fp, 1);
   RegisterConfig config(palloc, ralloc);
 
-  Zone zone(isolate->allocator());
+  Zone zone(isolate->allocator(), ZONE_NAME);
   HandleScope scope(isolate);
   MachineSignature::Builder builder(&zone, 1, 12);
   builder.AddReturn(MachineType::Int32());
@@ -1161,14 +1186,16 @@ void TestStackSlot(MachineType slot_type, T expected) {
   BufferedRawMachineAssemblerTester<T> f(slot_type);
   Node* target = f.HeapConstant(inner);
   Node* stack_slot = f.StackSlot(slot_type.representation());
-  Node* args[12];
+  Node* nodes[14];
+  int input_count = 0;
+  nodes[input_count++] = target;
   for (int i = 0; i < 10; i++) {
-    args[i] = f.Int32Constant(i);
+    nodes[input_count++] = f.Int32Constant(i);
   }
-  args[10] = f.Parameter(0);
-  args[11] = stack_slot;
+  nodes[input_count++] = f.Parameter(0);
+  nodes[input_count++] = stack_slot;
 
-  f.CallN(desc, target, args);
+  f.CallN(desc, input_count, nodes);
   f.Return(f.Load(slot_type, stack_slot, f.IntPtrConstant(0)));
 
   CHECK_EQ(expected, f.Call(expected));
@@ -1181,7 +1208,7 @@ TEST(RunStackSlotInt32) {
 
 #if !V8_TARGET_ARCH_32_BIT
 TEST(RunStackSlotInt64) {
-  int64_t magic = 0x123456789abcdef0;
+  int64_t magic = 0x123456789ABCDEF0;
   TestStackSlot(MachineType::Int64(), magic);
 }
 #endif
@@ -1195,6 +1222,8 @@ TEST(RunStackSlotFloat64) {
   double magic = 3456.375;
   TestStackSlot(MachineType::Float64(), magic);
 }
+
+}  // namespace test_run_native_calls
 }  // namespace compiler
 }  // namespace internal
 }  // namespace v8

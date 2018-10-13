@@ -35,7 +35,8 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kPPC_RotLeftAndClear64:
     case kPPC_RotLeftAndClearLeft64:
     case kPPC_RotLeftAndClearRight64:
-    case kPPC_Add:
+    case kPPC_Add32:
+    case kPPC_Add64:
     case kPPC_AddWithOverflow32:
     case kPPC_AddPair:
     case kPPC_AddDouble:
@@ -108,6 +109,8 @@ int InstructionScheduler::GetTargetInstructionFlags(
     case kPPC_BitcastFloat32ToInt32:
     case kPPC_BitcastInt64ToDouble:
     case kPPC_BitcastDoubleToInt64:
+    case kPPC_ByteRev32:
+    case kPPC_ByteRev64:
       return kNoOpcodeFlags;
 
     case kPPC_LoadWordS8:
@@ -140,7 +143,6 @@ int InstructionScheduler::GetTargetInstructionFlags(
   }
 
   UNREACHABLE();
-  return kNoOpcodeFlags;
 }
 
 

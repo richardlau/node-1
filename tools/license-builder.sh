@@ -29,8 +29,8 @@ fi
 
 
 # Dependencies bundled in distributions
-addlicense "c-ares" "deps/cares" \
-           "$(sed -e '/^ \*\/$/,$d' -e '/^$/d' -e 's/^[/ ]\* *//' ${rootdir}/deps/cares/src/ares_init.c)"
+addlicense "Acorn" "deps/acorn" "$(cat ${rootdir}/deps/acorn/LICENSE)"
+addlicense "c-ares" "deps/cares" "$(tail -n +3 ${rootdir}/deps/cares/LICENSE.md)"
 addlicense "HTTP Parser" "deps/http_parser" "$(cat deps/http_parser/LICENSE-MIT)"
 if [ -f "${rootdir}/deps/icu/LICENSE" ]; then
   # ICU 57 and following. Drop the BOM
@@ -71,26 +71,21 @@ addlicense "npm" "deps/npm" "$(cat ${rootdir}/deps/npm/LICENSE)"
 
 # Build tools
 addlicense "GYP" "tools/gyp" "$(cat ${rootdir}/tools/gyp/LICENSE)"
-addlicense "marked" "tools/doc/node_modules/marked" \
-           "$(cat ${rootdir}/tools/doc/node_modules/marked/LICENSE)"
+addlicense "inspector_protocol" "tools/inspector_protocol" "$(cat ${rootdir}/tools/inspector_protocol/LICENSE)"
+addlicense "jinja2" "tools/jinja2" "$(cat ${rootdir}/tools/jinja2/LICENSE)"
+addlicense "markupsafe" "tools/markupsafe" "$(cat ${rootdir}/tools/markupsafe/LICENSE)"
 
 # Testing tools
 addlicense "cpplint.py" "tools/cpplint.py" \
            "$(sed -e '/^$/,$d' -e 's/^#$//' -e 's/^# //' ${rootdir}/tools/cpplint.py | tail -n +3)"
-addlicense "ESLint" "tools/eslint" "$(cat ${rootdir}/tools/eslint/LICENSE)"
+addlicense "ESLint" "tools/node_modules/eslint" "$(cat ${rootdir}/tools/node_modules/eslint/LICENSE)"
+addlicense "babel-eslint" "tools/node_modules/babel-eslint" "$(cat ${rootdir}/tools/node_modules/babel-eslint/LICENSE)"
 addlicense "gtest" "deps/gtest" "$(cat ${rootdir}/deps/gtest/LICENSE)"
-addlicense "node-weak" "test/gc/node_modules/weak" \
-           "$(cat ${rootdir}/test/gc/node_modules/weak/LICENSE)"
 
-# v8_inspector
-addlicense "v8_inspector" "deps/v8_inspector/third_party/v8_inspector" \
-           "$(cat ${rootdir}/deps/v8_inspector/third_party/v8_inspector/LICENSE)"
-# Build tooling for v8_inspector
-addlicense "jinja2" "deps/v8_inspector/third_party/jinja2" \
-           "$(cat ${rootdir}/deps/v8_inspector/third_party/jinja2/LICENSE)"
-addlicense "markupsafe" "deps/v8_inspector/third_party/markupsafe" \
-           "$(cat ${rootdir}/deps/v8_inspector/third_party/markupsafe/LICENSE)"
+# nghttp2
+addlicense "nghttp2" "deps/nghttp2" "$(cat ${rootdir}/deps/nghttp2/COPYING)"
 
-
+# node-inspect
+addlicense "node-inspect" "deps/node-inspect" "$(cat ${rootdir}/deps/node-inspect/LICENSE)"
 
 mv $tmplicense $licensefile

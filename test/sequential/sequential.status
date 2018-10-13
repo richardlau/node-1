@@ -5,8 +5,12 @@ prefix sequential
 # sample-test                       : PASS,FLAKY
 
 [true] # This section applies to all platforms
+# https://github.com/nodejs/node/issues/22336
+test-gc-http-client: PASS,FLAKY
 
 [$system==win32]
+# https://github.com/nodejs/node/issues/22327
+test-http2-large-file: PASS, FLAKY
 
 [$system==linux]
 
@@ -16,9 +20,4 @@ prefix sequential
 
 [$system==freebsd]
 
-# fs-watch currently needs special configuration on AIX and we
-# want to improve under https://github.com/nodejs/node/issues/5085.
-# Tests are disabled so CI can be green and we can spot other
-# regressions until this work is complete
 [$system==aix]
-test-fs-watch               : FAIL,PASS

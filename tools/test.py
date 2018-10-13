@@ -42,6 +42,8 @@ import threading
 import utils
 import multiprocessing
 import errno
+import copy
+import ast
 
 from os.path import join, dirname, abspath, basename, isdir, exists
 from datetime import datetime
@@ -52,6 +54,7 @@ skip_regex = re.compile(r'# SKIP\S*\s+(.*)', re.IGNORECASE)
 
 VERBOSE = False
 
+os.environ['NODE_OPTIONS'] = ''
 
 # ---------------------------------------------
 # --- P r o g r e s s   I n d i c a t o r s ---
@@ -76,7 +79,6 @@ class ProgressIndicator(object):
     self.failed = [ ]
     self.flaky_failed = [ ]
     self.crashed = 0
-    self.flaky_crashed = 0
     self.lock = threading.Lock()
     self.shutdown_event = threading.Event()
 
@@ -154,8 +156,6 @@ class ProgressIndicator(object):
       if output.UnexpectedOutput():
         if FLAKY in output.test.outcomes and self.flaky_tests_mode == DONTCARE:
           self.flaky_failed.append(output)
-          if output.HasCrashed():
-            self.flaky_crashed += 1
         else:
           self.failed.append(output)
           if output.HasCrashed():
@@ -255,11 +255,16 @@ class DotsProgressIndicator(SimpleProgressIndicator):
 
 class TapProgressIndicator(SimpleProgressIndicator):
 
-  def _printDiagnostic(self, messages):
-    for l in messages.splitlines():
-      logger.info('# ' + l)
+  def _printDiagnostic(self):
+    logger.info('  severity: %s', self.severity)
+    self.exitcode and logger.info('  exitcode: %s', self.exitcode)
+    logger.info('  stack: |-')
+
+    for l in self.traceback.splitlines():
+      logger.info('    ' + l)
 
   def Starting(self):
+    logger.info('TAP version 13')
     logger.info('1..%i' % len(self.cases))
     self._done = 0
 
@@ -268,31 +273,35 @@ class TapProgressIndicator(SimpleProgressIndicator):
 
   def HasRun(self, output):
     self._done += 1
+    self.traceback = ''
+    self.severity = 'ok'
+    self.exitcode = ''
 
     # Print test name as (for example) "parallel/test-assert".  Tests that are
     # scraped from the addons documentation are all named test.js, making it
     # hard to decipher what test is running when only the filename is printed.
     prefix = abspath(join(dirname(__file__), '../test')) + os.sep
     command = output.command[-1]
-    if command.endswith('.js'): command = command[:-3]
-    if command.startswith(prefix): command = command[len(prefix):]
-    command = command.replace('\\', '/')
+    command = NormalizePath(command, prefix)
 
     if output.UnexpectedOutput():
       status_line = 'not ok %i %s' % (self._done, command)
+      self.severity = 'fail'
+      self.exitcode = output.output.exit_code
+      self.traceback = output.output.stdout + output.output.stderr
+
       if FLAKY in output.test.outcomes and self.flaky_tests_mode == DONTCARE:
         status_line = status_line + ' # TODO : Fix flaky test'
+        self.severity = 'flaky'
+
       logger.info(status_line)
-      self._printDiagnostic("\n".join(output.diagnostic))
 
       if output.HasCrashed():
-        self._printDiagnostic(PrintCrashed(output.output.exit_code))
+        self.severity = 'crashed'
 
-      if output.HasTimedOut():
-        self._printDiagnostic('TIMEOUT')
+      elif output.HasTimedOut():
+        self.severity = 'fail'
 
-      self._printDiagnostic(output.output.stderr)
-      self._printDiagnostic(output.output.stdout)
     else:
       skip = skip_regex.search(output.output.stdout)
       if skip:
@@ -303,7 +312,11 @@ class TapProgressIndicator(SimpleProgressIndicator):
         if FLAKY in output.test.outcomes:
           status_line = status_line + ' # TODO : Fix flaky test'
         logger.info(status_line)
-      self._printDiagnostic("\n".join(output.diagnostic))
+
+      if output.diagnostic:
+        self.severity = 'ok'
+        self.traceback = output.diagnostic
+
 
     duration = output.test.duration
 
@@ -314,8 +327,44 @@ class TapProgressIndicator(SimpleProgressIndicator):
     # duration_ms is measured in seconds and is read as such by TAP parsers.
     # It should read as "duration including ms" rather than "duration in ms"
     logger.info('  ---')
-    logger.info('  duration_ms: %d.%d' % (total_seconds, duration.microseconds / 1000))
+    logger.info('  duration_ms: %d.%d' %
+      (total_seconds, duration.microseconds / 1000))
+    if self.severity is not 'ok' or self.traceback is not '':
+      if output.HasTimedOut():
+        self.traceback = 'timeout\n' + output.output.stdout + output.output.stderr
+      self._printDiagnostic()
     logger.info('  ...')
+
+  def Done(self):
+    pass
+
+class DeoptsCheckProgressIndicator(SimpleProgressIndicator):
+
+  def Starting(self):
+    pass
+
+  def AboutToRun(self, case):
+    pass
+
+  def HasRun(self, output):
+    # Print test name as (for example) "parallel/test-assert".  Tests that are
+    # scraped from the addons documentation are all named test.js, making it
+    # hard to decipher what test is running when only the filename is printed.
+    prefix = abspath(join(dirname(__file__), '../test')) + os.sep
+    command = output.command[-1]
+    command = NormalizePath(command, prefix)
+
+    stdout = output.output.stdout.strip()
+    printed_file = False
+    for line in stdout.splitlines():
+      if (line.startswith("[aborted optimiz") or \
+          line.startswith("[disabled optimiz")) and \
+         ("because:" in line or "reason:" in line):
+        if not printed_file:
+          printed_file = True
+          print '==== %s ====' % command
+          self.failed.append(output)
+        print '  %s' % line
 
   def Done(self):
     pass
@@ -412,7 +461,8 @@ PROGRESS_INDICATORS = {
   'dots': DotsProgressIndicator,
   'color': ColorProgressIndicator,
   'tap': TapProgressIndicator,
-  'mono': MonochromeProgressIndicator
+  'mono': MonochromeProgressIndicator,
+  'deopts': DeoptsCheckProgressIndicator
 }
 
 
@@ -440,6 +490,7 @@ class TestCase(object):
     self.arch = arch
     self.mode = mode
     self.parallel = False
+    self.disable_core_files = False
     self.thread_id = 0
 
   def IsNegative(self):
@@ -464,25 +515,18 @@ class TestCase(object):
     output = Execute(full_command,
                      self.context,
                      self.context.GetTimeout(self.mode),
-                     env)
-    self.Cleanup()
+                     env,
+                     disable_core_files = self.disable_core_files)
     return TestOutput(self,
                       full_command,
                       output,
                       self.context.store_unexpected_output)
 
-  def BeforeRun(self):
-    pass
-
-  def AfterRun(self, result):
-    pass
-
   def Run(self):
-    self.BeforeRun()
-
     try:
       result = self.RunCommand(self.GetCommand(), {
-        "TEST_THREAD_ID": "%d" % self.thread_id
+        "TEST_THREAD_ID": "%d" % self.thread_id,
+        "TEST_PARALLEL" : "%d" % self.parallel
       })
     finally:
       # Tests can leave the tty in non-blocking mode. If the test runner
@@ -494,11 +538,7 @@ class TestCase(object):
         from os import O_NONBLOCK
         for fd in 0,1,2: fcntl(fd, F_SETFL, ~O_NONBLOCK & fcntl(fd, F_GETFL))
 
-    self.AfterRun(result)
     return result
-
-  def Cleanup(self):
-    return
 
 
 class TestOutput(object):
@@ -521,9 +561,6 @@ class TestOutput(object):
       outcome = PASS
     return not outcome in self.test.outcomes
 
-  def HasPreciousOutput(self):
-    return self.UnexpectedOutput() and self.store_unexpected_output
-
   def HasCrashed(self):
     if utils.IsWindows():
       return 0x80000000 & self.output.exit_code and not (0x3FFFFF00 & self.output.exit_code)
@@ -531,8 +568,7 @@ class TestOutput(object):
       # Timed out tests will have exit_code -signal.SIGTERM.
       if self.output.timed_out:
         return False
-      return self.output.exit_code < 0 and \
-             self.output.exit_code != -signal.SIGABRT
+      return self.output.exit_code < 0
 
   def HasTimedOut(self):
     return self.output.timed_out;
@@ -545,11 +581,11 @@ class TestOutput(object):
       return execution_failed
 
 
-def KillProcessWithID(pid):
+def KillProcessWithID(pid, signal_to_send=signal.SIGTERM):
   if utils.IsWindows():
     os.popen('taskkill /T /F /PID %d' % pid)
   else:
-    os.kill(pid, signal.SIGTERM)
+    os.kill(pid, signal_to_send)
 
 
 MAX_SLEEP_TIME = 0.1
@@ -568,6 +604,17 @@ def Win32SetErrorMode(mode):
     pass
   return prev_error_mode
 
+
+def KillTimedOutProcess(context, pid):
+  signal_to_send = signal.SIGTERM
+  if context.abort_on_timeout:
+    # Using SIGABRT here allows the OS to generate a core dump that can be
+    # looked at post-mortem, which helps for investigating failures that are
+    # difficult to reproduce.
+    signal_to_send = signal.SIGABRT
+  KillProcessWithID(pid, signal_to_send)
+
+
 def RunProcess(context, timeout, args, **rest):
   if context.verbose: print "#", " ".join(args)
   popen_args = args
@@ -585,7 +632,6 @@ def RunProcess(context, timeout, args, **rest):
   pty_out = rest.pop('pty_out')
 
   process = subprocess.Popen(
-    shell = utils.IsWindows(),
     args = popen_args,
     **rest
   )
@@ -607,7 +653,7 @@ def RunProcess(context, timeout, args, **rest):
     while True:
       if time.time() >= end_time:
         # Kill the process and wait for it to exit.
-        KillProcessWithID(process.pid)
+        KillTimedOutProcess(context, process.pid)
         exit_code = process.wait()
         timed_out = True
         break
@@ -628,7 +674,7 @@ def RunProcess(context, timeout, args, **rest):
   while exit_code is None:
     if (not end_time is None) and (time.time() >= end_time):
       # Kill the process and wait for it to exit.
-      KillProcessWithID(process.pid)
+      KillTimedOutProcess(context, process.pid)
       exit_code = process.wait()
       timed_out = True
     else:
@@ -659,31 +705,58 @@ def CheckedUnlink(name):
       PrintError("os.unlink() " + str(e))
     break
 
-def Execute(args, context, timeout=None, env={}, faketty=False):
+def Execute(args, context, timeout=None, env={}, faketty=False, disable_core_files=False, input=None):
   if faketty:
     import pty
     (out_master, fd_out) = pty.openpty()
-    fd_err = fd_out
+    fd_in = fd_err = fd_out
     pty_out = out_master
+
+    if input is not None:
+      # Before writing input data, disable echo so the input doesn't show
+      # up as part of the output.
+      import termios
+      attr = termios.tcgetattr(fd_in)
+      attr[3] = attr[3] & ~termios.ECHO
+      termios.tcsetattr(fd_in, termios.TCSADRAIN, attr)
+
+      os.write(pty_out, input)
+      os.write(pty_out, '\x04') # End-of-file marker (Ctrl+D)
   else:
     (fd_out, outname) = tempfile.mkstemp()
     (fd_err, errname) = tempfile.mkstemp()
+    fd_in = 0
     pty_out = None
 
-  # Extend environment
   env_copy = os.environ.copy()
+
+  # Remove NODE_PATH
+  if "NODE_PATH" in env_copy:
+    del env_copy["NODE_PATH"]
+
+  # Extend environment
   for key, value in env.iteritems():
     env_copy[key] = value
+
+  preexec_fn = None
+
+  if disable_core_files and not utils.IsWindows():
+    def disableCoreFiles():
+      import resource
+      resource.setrlimit(resource.RLIMIT_CORE, (0,0))
+    preexec_fn = disableCoreFiles
 
   (process, exit_code, timed_out, output) = RunProcess(
     context,
     timeout,
     args = args,
+    stdin = fd_in,
     stdout = fd_out,
     stderr = fd_err,
     env = env_copy,
     faketty = faketty,
-    pty_out = pty_out
+    pty_out = pty_out,
+    preexec_fn = preexec_fn
   )
   if faketty:
     os.close(out_master)
@@ -716,7 +789,7 @@ class TestConfiguration(object):
     if len(path) > len(file):
       return False
     for i in xrange(len(path)):
-      if not path[i].match(file[i]):
+      if not path[i].match(NormalizePath(file[i])):
         return False
     return True
 
@@ -731,11 +804,6 @@ class TestSuite(object):
 
   def GetName(self):
     return self.name
-
-
-# Use this to run several variants of the tests, e.g.:
-# VARIANT_FLAGS = [[], ['--always_compact', '--noflush_code']]
-VARIANT_FLAGS = [[]]
 
 
 class TestRepository(TestSuite):
@@ -769,11 +837,11 @@ class TestRepository(TestSuite):
     return self.GetConfiguration(context).GetBuildRequirements()
 
   def AddTestsToList(self, result, current_path, path, context, arch, mode):
-    for v in VARIANT_FLAGS:
-      tests = self.GetConfiguration(context).ListTests(current_path, path,
-                                                       arch, mode)
-      for t in tests: t.variant_flags = v
-      result += tests * context.repeat
+    tests = self.GetConfiguration(context).ListTests(current_path, path,
+                                                     arch, mode)
+    result += tests
+    for i in range(1, context.repeat):
+      result += copy.deepcopy(tests)
 
   def GetTestStatus(self, context, sections, defs):
     self.GetConfiguration(context).GetTestStatus(sections, defs)
@@ -809,12 +877,6 @@ class LiteralTestSuite(TestSuite):
       test.GetTestStatus(context, sections, defs)
 
 
-SUFFIX = {
-    'debug'   : '_g',
-    'release' : '' }
-FLAGS = {
-    'debug'   : ['--enable-slow-asserts', '--debug-code', '--verify-heap'],
-    'release' : []}
 TIMEOUT_SCALEFACTOR = {
     'armv6' : { 'debug' : 12, 'release' : 3 },  # The ARM buildbots are slow.
     'arm'   : { 'debug' :  8, 'release' : 2 },
@@ -827,11 +889,10 @@ class Context(object):
 
   def __init__(self, workspace, buildspace, verbose, vm, args, expect_fail,
                timeout, processor, suppress_dialogs,
-               store_unexpected_output, repeat):
+               store_unexpected_output, repeat, abort_on_timeout):
     self.workspace = workspace
     self.buildspace = buildspace
     self.verbose = verbose
-    self.vm_root = vm
     self.node_args = args
     self.expect_fail = expect_fail
     self.timeout = timeout
@@ -839,6 +900,8 @@ class Context(object):
     self.suppress_dialogs = suppress_dialogs
     self.store_unexpected_output = store_unexpected_output
     self.repeat = repeat
+    self.abort_on_timeout = abort_on_timeout
+    self.v8_enable_inspector = True
 
   def GetVm(self, arch, mode):
     if arch == 'none':
@@ -850,19 +913,14 @@ class Context(object):
     # http://code.google.com/p/gyp/issues/detail?id=40
     # It will put the builds into Release/node.exe or Debug/node.exe
     if utils.IsWindows():
-      out_dir = os.path.join(dirname(__file__), "..", "out")
-      if not exists(out_dir):
-        if mode == 'debug':
-          name = os.path.abspath('Debug/node.exe')
-        else:
-          name = os.path.abspath('Release/node.exe')
-      else:
-        name = os.path.abspath(name + '.exe')
+      if not exists(name + '.exe'):
+        name = name.replace('out/', '')
+      name = os.path.abspath(name + '.exe')
+
+    if not exists(name):
+      raise ValueError('Could not find executable. Should be ' + name)
 
     return name
-
-  def GetVmFlags(self, testcase, mode):
-    return testcase.variant_flags + FLAGS[mode]
 
   def GetTimeout(self, mode):
     return self.timeout * TIMEOUT_SCALEFACTOR[ARCH_GUESS or 'ia32'][mode]
@@ -870,7 +928,6 @@ class Context(object):
 def RunTestCases(cases_to_run, progress, tasks, flaky_tests_mode):
   progress = PROGRESS_INDICATORS[progress](cases_to_run, flaky_tests_mode)
   return progress.Run(tasks)
-
 
 # -------------------------------------------
 # --- T e s t   C o n f i g u r a t i o n ---
@@ -946,18 +1003,6 @@ class ListSet(Set):
 
   def IsEmpty(self):
     return len(self.elms) == 0
-
-
-class Everything(Set):
-
-  def Intersect(self, that):
-    return that
-
-  def Union(self, that):
-    return self
-
-  def IsEmpty(self):
-    return False
 
 
 class Nothing(Set):
@@ -1184,6 +1229,7 @@ class ClassifiedTest(object):
     self.case = case
     self.outcomes = outcomes
     self.parallel = self.case.parallel
+    self.disable_core_files = self.case.disable_core_files
 
 
 class Configuration(object):
@@ -1288,9 +1334,7 @@ def ReadConfigurationInto(path, sections, defs):
     if prefix_match:
       prefix = SplitPath(prefix_match.group(1).strip())
       continue
-    print "Malformed line: '%s'." % line
-    return False
-  return True
+    raise Exception("Malformed line: '%s'." % line)
 
 
 # ---------------
@@ -1317,7 +1361,7 @@ def BuildOptions():
   result.add_option("-s", "--suite", help="A test suite",
       default=[], action="append")
   result.add_option("-t", "--timeout", help="Timeout in seconds",
-      default=60, type="int")
+      default=120, type="int")
   result.add_option("--arch", help='The architecture to run tests for',
       default='none')
   result.add_option("--snapshot", help="Run the tests with snapshot turned on",
@@ -1329,11 +1373,18 @@ def BuildOptions():
       help="Expect test cases to fail", default=False, action="store_true")
   result.add_option("--valgrind", help="Run tests through valgrind",
       default=False, action="store_true")
+  result.add_option("--worker", help="Run parallel tests inside a worker context",
+      default=False, action="store_true")
+  result.add_option("--check-deopts", help="Check tests for permanent deoptimizations",
+      default=False, action="store_true")
   result.add_option("--cat", help="Print the source of the tests",
       default=False, action="store_true")
   result.add_option("--flaky-tests",
       help="Regard tests marked as flaky (run|skip|dontcare)",
       default="run")
+  result.add_option("--skip-tests",
+      help="Tests that should not be executed (comma-separated)",
+      default="")
   result.add_option("--warn-unused", help="Report unused rules",
       default=False, action="store_true")
   result.add_option("-j", help="The number of parallel tasks to run",
@@ -1361,6 +1412,12 @@ def BuildOptions():
   result.add_option('--repeat',
       help='Number of times to repeat given tests',
       default=1, type="int")
+  result.add_option('--abort-on-timeout',
+      help='Send SIGABRT instead of SIGTERM to kill processes that time out',
+      default=False, action="store_true", dest="abort_on_timeout")
+  result.add_option("--type",
+      help="Type of build (simple, fips)",
+      default=None)
   return result
 
 
@@ -1370,6 +1427,7 @@ def ProcessOptions(options):
   options.arch = options.arch.split(',')
   options.mode = options.mode.split(',')
   options.run = options.run.split(',')
+  options.skip_tests = options.skip_tests.split(',')
   if options.run == [""]:
     options.run = None
   elif len(options.run) != 2:
@@ -1439,6 +1497,17 @@ def SplitPath(s):
   stripped = [ c.strip() for c in s.split('/') ]
   return [ Pattern(s) for s in stripped if len(s) > 0 ]
 
+def NormalizePath(path, prefix='test/'):
+  # strip the extra path information of the specified test
+  prefix = prefix.replace('\\', '/')
+  path = path.replace('\\', '/')
+  if path.startswith(prefix):
+    path = path[len(prefix):]
+  if path.endswith('.js'):
+    path = path[:-3]
+  elif path.endswith('.mjs'):
+    path = path[:-4]
+  return path
 
 def GetSpecialCommandProcessor(value):
   if (not value) or (value.find('@') == -1):
@@ -1453,21 +1522,6 @@ def GetSpecialCommandProcessor(value):
     def ExpandCommand(args):
       return prefix + args + suffix
     return ExpandCommand
-
-
-BUILT_IN_TESTS = [
-  'sequential',
-  'parallel',
-  'pummel',
-  'message',
-  'internet',
-  'addons',
-  'gc',
-  'debugger',
-  'doctool',
-  'inspector',
-]
-
 
 def GetSuites(test_root):
   def IsSuite(path):
@@ -1487,6 +1541,44 @@ def PrintCrashed(code):
     return "CRASHED (Signal: %d)" % -code
 
 
+# these suites represent special cases that should not be run as part of the
+# default JavaScript test-run, e.g., internet/ requires a network connection,
+# addons/ requires compilation.
+IGNORED_SUITES = [
+  'addons',
+  'addons-napi',
+  'code-cache',
+  'doctool',
+  'internet',
+  'pummel',
+  'tick-processor',
+  'v8-updates'
+]
+
+
+def ArgsToTestPaths(test_root, args, suites):
+  if len(args) == 0 or 'default' in args:
+    def_suites = filter(lambda s: s not in IGNORED_SUITES, suites)
+    args = filter(lambda a: a != 'default', args) + def_suites
+  subsystem_regex = re.compile(r'^[a-zA-Z-]*$')
+  check = lambda arg: subsystem_regex.match(arg) and (arg not in suites)
+  mapped_args = ["*/test*-%s-*" % arg if check(arg) else arg for arg in args]
+  paths = [SplitPath(NormalizePath(a)) for a in mapped_args]
+  return paths
+
+
+def get_env_type(vm, options_type, context):
+  if options_type is not None:
+    env_type = options_type
+  else:
+    # 'simple' is the default value for 'env_type'.
+    env_type = 'simple'
+    ssl_ver = Execute([vm, '-p', 'process.versions.openssl'], context).stdout
+    if 'fips' in ssl_ver:
+      env_type = 'fips'
+  return env_type
+
+
 def Main():
   parser = BuildOptions()
   (options, args) = parser.parse_args()
@@ -1502,24 +1594,32 @@ def Main():
     logger.addHandler(fh)
 
   workspace = abspath(join(dirname(sys.argv[0]), '..'))
-  suites = GetSuites(join(workspace, 'test'))
+  test_root = join(workspace, 'test')
+  suites = GetSuites(test_root)
   repositories = [TestRepository(join(workspace, 'test', name)) for name in suites]
   repositories += [TestRepository(a) for a in options.suite]
 
   root = LiteralTestSuite(repositories)
-  if len(args) == 0:
-    paths = [SplitPath(t) for t in BUILT_IN_TESTS]
-  else:
-    paths = [ ]
-    for arg in args:
-      path = SplitPath(arg)
-      paths.append(path)
+  paths = ArgsToTestPaths(test_root, args, suites)
 
   # Check for --valgrind option. If enabled, we overwrite the special
   # command flag with a command that uses the run-valgrind.py script.
   if options.valgrind:
     run_valgrind = join(workspace, "tools", "run-valgrind.py")
     options.special_command = "python -u " + run_valgrind + " @"
+
+  if options.check_deopts:
+    options.node_args.append("--trace-opt")
+    options.node_args.append("--trace-file-names")
+    # --always-opt is needed because many tests do not run long enough for the
+    # optimizer to kick in, so this flag will force it to run.
+    options.node_args.append("--always-opt")
+    options.progress = "deopts"
+
+  if options.worker:
+    run_worker = join(workspace, "tools", "run-worker.js")
+    options.node_args.append('--experimental-worker')
+    options.node_args.append(run_worker)
 
   shell = abspath(options.shell)
   buildspace = dirname(shell)
@@ -1535,7 +1635,8 @@ def Main():
                     processor,
                     options.suppress_dialogs,
                     options.store_unexpected_output,
-                    options.repeat)
+                    options.repeat,
+                    options.abort_on_timeout)
 
   # Get status for tests
   sections = [ ]
@@ -1565,10 +1666,11 @@ def Main():
           'mode': mode,
           'system': utils.GuessOS(),
           'arch': vmArch,
+          'type': get_env_type(vm, options.type, context),
         }
         test_list = root.ListTests([], path, context, arch, mode)
         unclassified_tests += test_list
-        (cases, unused_rules, all_outcomes) = (
+        (cases, unused_rules, _) = (
             config.ClassifyTests(test_list, env))
         if globally_unused_rules is None:
           globally_unused_rules = set(unused_rules)
@@ -1577,6 +1679,12 @@ def Main():
               globally_unused_rules.intersection(unused_rules))
         all_cases += cases
         all_unused.append(unused_rules)
+
+  # We want to skip the inspector tests if node was built without the inspector.
+  has_inspector = Execute([vm,
+      "-p", "process.config.variables.v8_enable_inspector"], context)
+  if has_inspector.stdout.rstrip() == "0":
+      context.v8_enable_inspector = False
 
   if options.cat:
     visited = set()
@@ -1597,9 +1705,9 @@ def Main():
 
   tempdir = os.environ.get('NODE_TEST_DIR') or options.temp_dir
   if tempdir:
+    os.environ['NODE_TEST_DIR'] = tempdir
     try:
       os.makedirs(tempdir)
-      os.environ['NODE_TEST_DIR'] = tempdir
     except OSError as exception:
       if exception.errno != errno.EEXIST:
         print "Could not create the temporary directory", options.temp_dir
@@ -1610,6 +1718,11 @@ def Main():
 
   result = None
   def DoSkip(case):
+    # A list of tests that should be skipped can be provided. This is
+    # useful for tests that fail in some environments, e.g., under coverage.
+    if options.skip_tests != [""]:
+        if [ st for st in options.skip_tests if st in case.case.file ]:
+            return True
     if SKIP in case.outcomes or SLOW in case.outcomes:
       return True
     return FLAKY in case.outcomes and options.flaky_tests == SKIP
@@ -1647,7 +1760,7 @@ def Main():
     timed_tests.sort(lambda a, b: a.CompareTime(b))
     index = 1
     for entry in timed_tests[:20]:
-      t = FormatTime(entry.duration)
+      t = FormatTime(entry.duration.total_seconds())
       sys.stderr.write("%4i (%s) %s\n" % (index, t, entry.GetLabel()))
       index += 1
 

@@ -5,11 +5,16 @@
 #ifndef V8_V8_H_
 #define V8_V8_H_
 
-#include "include/v8.h"
-#include "src/allocation.h"
+#include "src/globals.h"
 
 namespace v8 {
+
+class Platform;
+class StartupData;
+
 namespace internal {
+
+class Isolate;
 
 class V8 : public AllStatic {
  public:
@@ -20,12 +25,13 @@ class V8 : public AllStatic {
 
   // Report process out of memory. Implementation found in api.cc.
   // This function will not return, but will terminate the execution.
-  static void FatalProcessOutOfMemory(const char* location,
-                                      bool is_heap_oom = false);
+  [[noreturn]] static void FatalProcessOutOfMemory(Isolate* isolate,
+                                                   const char* location,
+                                                   bool is_heap_oom = false);
 
   static void InitializePlatform(v8::Platform* platform);
   static void ShutdownPlatform();
-  static v8::Platform* GetCurrentPlatform();
+  V8_EXPORT_PRIVATE static v8::Platform* GetCurrentPlatform();
   // Replaces the current platform with the given platform.
   // Should be used only for testing.
   static void SetPlatformForTesting(v8::Platform* platform);

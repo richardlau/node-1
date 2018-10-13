@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
+import ast
 import errno
-import json
 import os
 import re
 import shutil
@@ -20,9 +20,7 @@ def abspath(*args):
 
 def load_config():
   s = open('config.gypi').read()
-  s = re.sub(r'#.*?\n', '', s) # strip comments
-  s = re.sub(r'\'', '"', s) # convert quotes
-  return json.loads(s)
+  return ast.literal_eval(s)
 
 def try_unlink(path):
   try:
@@ -33,6 +31,7 @@ def try_unlink(path):
 def try_symlink(source_path, link_path):
   print 'symlinking %s -> %s' % (source_path, link_path)
   try_unlink(link_path)
+  try_mkdir_r(os.path.dirname(link_path))
   os.symlink(source_path, link_path)
 
 def try_mkdir_r(path):
@@ -98,6 +97,15 @@ def npm_files(action):
   else:
     assert(0) # unhandled action type
 
+  # create/remove symlink
+  link_path = abspath(install_path, 'bin/npx')
+  if action == uninstall:
+    action([link_path], 'bin/npx')
+  elif action == install:
+    try_symlink('../lib/node_modules/npm/bin/npx-cli.js', link_path)
+  else:
+    assert(0) # unhandled action type
+
 def subdir_files(path, dest, action):
   ret = {}
   for dirpath, dirnames, filenames in os.walk(path):
@@ -124,7 +132,10 @@ def files(action):
       if sys.platform != 'darwin':
         output_prefix += 'lib.target/'
 
-  action([output_prefix + output_file], 'bin/' + output_file)
+  if 'false' == variables.get('node_shared'):
+    action([output_prefix + output_file], 'bin/' + output_file)
+  else:
+    action([output_prefix + output_file], 'lib/' + output_file)
 
   if 'true' == variables.get('node_use_dtrace'):
     action(['out/Release/node.d'], 'lib/dtrace/node.d')
@@ -133,6 +144,7 @@ def files(action):
   action(['src/node.stp'], 'share/systemtap/tapset/')
 
   action(['deps/v8/tools/gdbinit'], 'share/doc/node/')
+  action(['deps/v8/tools/lldb_commands.py'], 'share/doc/node/')
 
   if 'freebsd' in sys.platform or 'openbsd' in sys.platform:
     action(['doc/node.1'], 'man/man1/')
@@ -144,10 +156,20 @@ def files(action):
   headers(action)
 
 def headers(action):
+  def ignore_inspector_headers(files, dest):
+    inspector_headers = [
+      'deps/v8/include/v8-inspector.h',
+      'deps/v8/include/v8-inspector-protocol.h'
+    ]
+    files = filter(lambda name: name not in inspector_headers, files)
+    action(files, dest)
+
   action([
     'common.gypi',
     'config.gypi',
     'src/node.h',
+    'src/node_api.h',
+    'src/node_api_types.h',
     'src/node_buffer.h',
     'src/node_object_wrap.h',
     'src/node_version.h',
@@ -157,18 +179,16 @@ def headers(action):
   if sys.platform.startswith('aix'):
     action(['out/Release/node.exp'], 'include/node/')
 
-  subdir_files('deps/v8/include', 'include/node/', action)
-
-  if 'false' == variables.get('node_shared_cares'):
-    subdir_files('deps/cares/include', 'include/node/', action)
+  subdir_files('deps/v8/include', 'include/node/', ignore_inspector_headers)
 
   if 'false' == variables.get('node_shared_libuv'):
     subdir_files('deps/uv/include', 'include/node/', action)
 
-  if 'false' == variables.get('node_shared_openssl'):
+  if 'true' == variables.get('node_use_openssl') and \
+     'false' == variables.get('node_shared_openssl'):
     subdir_files('deps/openssl/openssl/include/openssl', 'include/node/openssl/', action)
     subdir_files('deps/openssl/config/archs', 'include/node/openssl/archs', action)
-    action(['deps/openssl/config/opensslconf.h'], 'include/node/openssl/')
+    subdir_files('deps/openssl/config', 'include/node/openssl', action)
 
   if 'false' == variables.get('node_shared_zlib'):
     action([

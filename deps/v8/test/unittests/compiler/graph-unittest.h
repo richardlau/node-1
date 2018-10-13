@@ -6,8 +6,11 @@
 #define V8_UNITTESTS_COMPILER_GRAPH_UNITTEST_H_
 
 #include "src/compiler/common-operator.h"
+#include "src/compiler/compiler-source-position-table.h"
 #include "src/compiler/graph.h"
+#include "src/compiler/node-origin-table.h"
 #include "src/compiler/typer.h"
+#include "src/handles.h"
 #include "test/unittests/test-utils.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -15,16 +18,14 @@ namespace v8 {
 namespace internal {
 
 // Forward declarations.
-template <class T>
-class Handle;
 class HeapObject;
 
 namespace compiler {
 
 using ::testing::Matcher;
 
-
-class GraphTest : public TestWithContext, public TestWithIsolateAndZone {
+class GraphTest : public virtual TestWithNativeContext,
+                  public virtual TestWithIsolateAndZone {
  public:
   explicit GraphTest(int num_parameters = 1);
   ~GraphTest() override;
@@ -53,14 +54,22 @@ class GraphTest : public TestWithContext, public TestWithIsolateAndZone {
   }
   Matcher<Node*> IsFalseConstant();
   Matcher<Node*> IsTrueConstant();
+  Matcher<Node*> IsNullConstant();
   Matcher<Node*> IsUndefinedConstant();
 
   CommonOperatorBuilder* common() { return &common_; }
   Graph* graph() { return &graph_; }
+  SourcePositionTable* source_positions() { return &source_positions_; }
+  NodeOriginTable* node_origins() { return &node_origins_; }
+  JSHeapBroker* js_heap_broker() { return &js_heap_broker_; }
 
  private:
+  CanonicalHandleScope canonical_;
   CommonOperatorBuilder common_;
   Graph graph_;
+  JSHeapBroker js_heap_broker_;
+  SourcePositionTable source_positions_;
+  NodeOriginTable node_origins_;
 };
 
 
@@ -71,7 +80,7 @@ class TypedGraphTest : public GraphTest {
 
  protected:
   Node* Parameter(int32_t index = 0) { return GraphTest::Parameter(index); }
-  Node* Parameter(Type* type, int32_t index = 0);
+  Node* Parameter(Type type, int32_t index = 0);
 
   Typer* typer() { return &typer_; }
 

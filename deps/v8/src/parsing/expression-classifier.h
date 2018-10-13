@@ -2,15 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef V8_PARSING_EXPRESSION_CLASSIFIER_H
-#define V8_PARSING_EXPRESSION_CLASSIFIER_H
+#ifndef V8_PARSING_EXPRESSION_CLASSIFIER_H_
+#define V8_PARSING_EXPRESSION_CLASSIFIER_H_
 
 #include "src/messages.h"
 #include "src/parsing/scanner.h"
-#include "src/parsing/token.h"
+#include "src/zone/zone-containers.h"
 
 namespace v8 {
 namespace internal {
+
+class DuplicateFinder;
 
 #define ERROR_CODES(T)                       \
   T(ExpressionProduction, 0)                 \
@@ -21,11 +23,31 @@ namespace internal {
   T(StrictModeFormalParametersProduction, 5) \
   T(ArrowFormalParametersProduction, 6)      \
   T(LetPatternProduction, 7)                 \
-  T(ObjectLiteralProduction, 8)              \
-  T(TailCallExpressionProduction, 9)         \
-  T(AsyncArrowFormalParametersProduction, 10)
+  T(AsyncArrowFormalParametersProduction, 8)
 
-template <typename Traits>
+// Expression classifiers serve two purposes:
+//
+// 1) They keep track of error messages that are pending (and other
+//    related information), waiting for the parser to decide whether
+//    the parsed expression is a pattern or not.
+// 2) They keep track of expressions that may need to be rewritten, if
+//    the parser decides that they are not patterns.  (A different
+//    mechanism implements the rewriting of patterns.)
+//
+// Expression classifiers are used by the parser in a stack fashion.
+// Each new classifier is pushed on top of the stack.  This happens
+// automatically by the class's constructor.  While on top of the
+// stack, the classifier records pending error messages and tracks the
+// pending non-patterns of the expression that is being parsed.
+//
+// At the end of its life, a classifier is either "accumulated" to the
+// one that is below it on the stack, or is "discarded".  The former
+// is achieved by calling the method Accumulate.  The latter is
+// achieved automatically by the destructor, but it can happen earlier
+// by calling the method Discard.  Both actions result in removing the
+// classifier from the parser's stack.
+
+template <typename Types>
 class ExpressionClassifier {
  public:
   enum ErrorKind : unsigned {
@@ -40,66 +62,47 @@ class ExpressionClassifier {
         : location(Scanner::Location::invalid()),
           message(MessageTemplate::kNone),
           kind(kUnusedError),
-          type(kSyntaxError),
           arg(nullptr) {}
     V8_INLINE explicit Error(Scanner::Location loc,
                              MessageTemplate::Template msg, ErrorKind k,
-                             const char* a = nullptr,
-                             ParseErrorType t = kSyntaxError)
-        : location(loc), message(msg), kind(k), type(t), arg(a) {}
+                             const char* a = nullptr)
+        : location(loc), message(msg), kind(k), arg(a) {}
 
     Scanner::Location location;
-    MessageTemplate::Template message : 26;
+    MessageTemplate::Template message : 28;
     unsigned kind : 4;
-    ParseErrorType type : 2;
     const char* arg;
   };
 
+  // clang-format off
   enum TargetProduction : unsigned {
 #define DEFINE_PRODUCTION(NAME, CODE) NAME = 1 << CODE,
     ERROR_CODES(DEFINE_PRODUCTION)
 #undef DEFINE_PRODUCTION
 
-        ExpressionProductions =
-            (ExpressionProduction | FormalParameterInitializerProduction |
-             TailCallExpressionProduction),
-    PatternProductions = (BindingPatternProduction |
-                          AssignmentPatternProduction | LetPatternProduction),
-    FormalParametersProductions = (DistinctFormalParametersProduction |
-                                   StrictModeFormalParametersProduction),
-    AllProductions =
-        (ExpressionProductions | PatternProductions |
-         FormalParametersProductions | ArrowFormalParametersProduction |
-         ObjectLiteralProduction | AsyncArrowFormalParametersProduction)
+#define DEFINE_ALL_PRODUCTIONS(NAME, CODE) NAME |
+    AllProductions = ERROR_CODES(DEFINE_ALL_PRODUCTIONS) /* | */ 0
+#undef DEFINE_ALL_PRODUCTIONS
   };
+  // clang-format on
 
-  enum FunctionProperties : unsigned {
-    NonSimpleParameter = 1 << 0
-  };
-
-  explicit ExpressionClassifier(const Traits* t)
-      : zone_(t->zone()),
-        non_patterns_to_rewrite_(t->GetNonPatternList()),
-        reported_errors_(t->GetReportedErrorList()),
-        duplicate_finder_(nullptr),
-        invalid_productions_(0),
-        function_properties_(0) {
-    reported_errors_begin_ = reported_errors_end_ = reported_errors_->length();
-    non_pattern_begin_ = non_patterns_to_rewrite_->length();
-  }
-
-  ExpressionClassifier(const Traits* t, DuplicateFinder* duplicate_finder)
-      : zone_(t->zone()),
-        non_patterns_to_rewrite_(t->GetNonPatternList()),
-        reported_errors_(t->GetReportedErrorList()),
+  explicit ExpressionClassifier(typename Types::Base* base,
+                                DuplicateFinder* duplicate_finder = nullptr)
+      : base_(base),
+        previous_(base->classifier_),
+        zone_(base->impl()->zone()),
+        reported_errors_(base->impl()->GetReportedErrorList()),
         duplicate_finder_(duplicate_finder),
         invalid_productions_(0),
-        function_properties_(0) {
-    reported_errors_begin_ = reported_errors_end_ = reported_errors_->length();
-    non_pattern_begin_ = non_patterns_to_rewrite_->length();
+        is_non_simple_parameter_list_(0) {
+    base->classifier_ = this;
+    reported_errors_begin_ = reported_errors_end_ = reported_errors_->size();
   }
 
-  ~ExpressionClassifier() { Discard(); }
+  V8_INLINE ~ExpressionClassifier() {
+    Discard();
+    if (base_->classifier_ == this) base_->classifier_ = previous_;
+  }
 
   V8_INLINE bool is_valid(unsigned productions) const {
     return (invalid_productions_ & productions) == 0;
@@ -179,31 +182,16 @@ class ExpressionClassifier {
     return reported_error(kLetPatternProduction);
   }
 
-  V8_INLINE bool has_object_literal_error() const {
-    return !is_valid(ObjectLiteralProduction);
-  }
-
-  V8_INLINE const Error& object_literal_error() const {
-    return reported_error(kObjectLiteralProduction);
-  }
-
-  V8_INLINE bool has_tail_call_expression() const {
-    return !is_valid(TailCallExpressionProduction);
-  }
-  V8_INLINE const Error& tail_call_expression_error() const {
-    return reported_error(kTailCallExpressionProduction);
-  }
-
   V8_INLINE const Error& async_arrow_formal_parameters_error() const {
     return reported_error(kAsyncArrowFormalParametersProduction);
   }
 
   V8_INLINE bool is_simple_parameter_list() const {
-    return !(function_properties_ & NonSimpleParameter);
+    return !is_non_simple_parameter_list_;
   }
 
   V8_INLINE void RecordNonSimpleParameter() {
-    function_properties_ |= NonSimpleParameter;
+    is_non_simple_parameter_list_ = 1;
   }
 
   void RecordExpressionError(const Scanner::Location& loc,
@@ -212,14 +200,6 @@ class ExpressionClassifier {
     if (!is_valid_expression()) return;
     invalid_productions_ |= ExpressionProduction;
     Add(Error(loc, message, kExpressionProduction, arg));
-  }
-
-  void RecordExpressionError(const Scanner::Location& loc,
-                             MessageTemplate::Template message,
-                             ParseErrorType type, const char* arg = nullptr) {
-    if (!is_valid_expression()) return;
-    invalid_productions_ |= ExpressionProduction;
-    Add(Error(loc, message, kExpressionProduction, arg, type));
   }
 
   void RecordFormalParameterInitializerError(const Scanner::Location& loc,
@@ -295,28 +275,10 @@ class ExpressionClassifier {
     Add(Error(loc, message, kLetPatternProduction, arg));
   }
 
-  void RecordObjectLiteralError(const Scanner::Location& loc,
-                                MessageTemplate::Template message,
-                                const char* arg = nullptr) {
-    if (has_object_literal_error()) return;
-    invalid_productions_ |= ObjectLiteralProduction;
-    Add(Error(loc, message, kObjectLiteralProduction, arg));
-  }
-
-  void RecordTailCallExpressionError(const Scanner::Location& loc,
-                                     MessageTemplate::Template message,
-                                     const char* arg = nullptr) {
-    if (has_tail_call_expression()) return;
-    invalid_productions_ |= TailCallExpressionProduction;
-    Add(Error(loc, message, kTailCallExpressionProduction, arg));
-  }
-
-  void Accumulate(ExpressionClassifier* inner, unsigned productions,
-                  bool merge_non_patterns = true) {
+  void Accumulate(ExpressionClassifier* inner, unsigned productions) {
     DCHECK_EQ(inner->reported_errors_, reported_errors_);
     DCHECK_EQ(inner->reported_errors_begin_, reported_errors_end_);
-    DCHECK_EQ(inner->reported_errors_end_, reported_errors_->length());
-    if (merge_non_patterns) MergeNonPatterns(inner);
+    DCHECK_EQ(inner->reported_errors_end_, reported_errors_->size());
     // Propagate errors from inner, but don't overwrite already recorded
     // errors.
     unsigned non_arrow_inner_invalid_productions =
@@ -329,9 +291,9 @@ class ExpressionClassifier {
       bool copy_BP_to_AFP = false;
       if (productions & ArrowFormalParametersProduction &&
           is_valid_arrow_formal_parameters()) {
-        // Also copy function properties if expecting an arrow function
-        // parameter.
-        function_properties_ |= inner->function_properties_;
+        // Also whether we've seen any non-simple parameters
+        // if expecting an arrow function parameter.
+        is_non_simple_parameter_list_ |= inner->is_non_simple_parameter_list_;
         if (!inner->is_valid_binding_pattern()) {
           copy_BP_to_AFP = true;
           invalid_productions_ |= ArrowFormalParametersProduction;
@@ -376,27 +338,20 @@ class ExpressionClassifier {
         }
       }
     }
-    reported_errors_->Rewind(reported_errors_end_);
+    reported_errors_->resize(reported_errors_end_);
     inner->reported_errors_begin_ = inner->reported_errors_end_ =
         reported_errors_end_;
   }
 
-  V8_INLINE int GetNonPatternBegin() const { return non_pattern_begin_; }
-
   V8_INLINE void Discard() {
-    if (reported_errors_end_ == reported_errors_->length()) {
-      reported_errors_->Rewind(reported_errors_begin_);
+    if (reported_errors_end_ == reported_errors_->size()) {
+      reported_errors_->resize(reported_errors_begin_);
       reported_errors_end_ = reported_errors_begin_;
     }
     DCHECK_EQ(reported_errors_begin_, reported_errors_end_);
-    DCHECK_LE(non_pattern_begin_, non_patterns_to_rewrite_->length());
-    non_patterns_to_rewrite_->Rewind(non_pattern_begin_);
   }
 
-  V8_INLINE void MergeNonPatterns(ExpressionClassifier* inner) {
-    DCHECK_LE(non_pattern_begin_, inner->non_pattern_begin_);
-    inner->non_pattern_begin_ = inner->non_patterns_to_rewrite_->length();
-  }
+  ExpressionClassifier* previous() const { return previous_; }
 
  private:
   V8_INLINE const Error& reported_error(ErrorKind kind) const {
@@ -410,6 +365,9 @@ class ExpressionClassifier {
     // We should only be looking for an error when we know that one has
     // been reported.  But we're not...  So this is to make sure we have
     // the same behaviour.
+    UNREACHABLE();
+
+    // Make MSVC happy by returning an error from this inaccessible path.
     static Error none;
     return none;
   }
@@ -417,8 +375,8 @@ class ExpressionClassifier {
   // Adds e to the end of the list of reported errors for this classifier.
   // It is expected that this classifier is the last one in the stack.
   V8_INLINE void Add(const Error& e) {
-    DCHECK_EQ(reported_errors_end_, reported_errors_->length());
-    reported_errors_->Add(e, zone_);
+    DCHECK_EQ(reported_errors_end_, reported_errors_->size());
+    reported_errors_->push_back(e);
     reported_errors_end_++;
   }
 
@@ -428,25 +386,19 @@ class ExpressionClassifier {
   // in an inner classifier) or it could be an existing error (in case a
   // copy is needed).
   V8_INLINE void Copy(int i) {
-    DCHECK_LT(i, reported_errors_->length());
+    DCHECK_LT(i, reported_errors_->size());
     if (reported_errors_end_ != i)
       reported_errors_->at(reported_errors_end_) = reported_errors_->at(i);
     reported_errors_end_++;
   }
 
+  typename Types::Base* base_;
+  ExpressionClassifier* previous_;
   Zone* zone_;
-  ZoneList<typename Traits::Type::Expression>* non_patterns_to_rewrite_;
-  ZoneList<Error>* reported_errors_;
+  ZoneVector<Error>* reported_errors_;
   DuplicateFinder* duplicate_finder_;
-  // The uint16_t for non_pattern_begin_ will not be enough in the case,
-  // e.g., of an array literal containing more than 64K inner array
-  // literals with spreads, as in:
-  // var N=65536; eval("var x=[];" + "[" + "[...x],".repeat(N) + "].length");
-  // An implementation limit error in ParserBase::AddNonPatternForRewriting
-  // will be triggered in this case.
-  uint16_t non_pattern_begin_;
-  unsigned invalid_productions_ : 14;
-  unsigned function_properties_ : 2;
+  unsigned invalid_productions_ : 15;
+  unsigned is_non_simple_parameter_list_ : 1;
   // The uint16_t for reported_errors_begin_ and reported_errors_end_ will
   // not be enough in the case of a long series of expressions using nested
   // classifiers, e.g., a long sequence of assignments, as in:
@@ -456,6 +408,8 @@ class ExpressionClassifier {
   // stack overflow while parsing.
   uint16_t reported_errors_begin_;
   uint16_t reported_errors_end_;
+
+  DISALLOW_COPY_AND_ASSIGN(ExpressionClassifier);
 };
 
 
@@ -465,4 +419,4 @@ class ExpressionClassifier {
 }  // namespace internal
 }  // namespace v8
 
-#endif  // V8_PARSING_EXPRESSION_CLASSIFIER_H
+#endif  // V8_PARSING_EXPRESSION_CLASSIFIER_H_

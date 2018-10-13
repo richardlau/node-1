@@ -1,6 +1,27 @@
+// Copyright Joyent, Inc. and other Node contributors.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 'use strict';
 
-require('../common');
+const common = require('../common');
 const assert = require('assert');
 
 // changes in environment should be visible to child processes
@@ -49,7 +70,6 @@ if (process.argv[2] === 'you-are-the-child') {
 delete process.env.NON_EXISTING_VARIABLE;
 assert.strictEqual(true, delete process.env.NON_EXISTING_VARIABLE);
 
-/* eslint-disable max-len */
 /* For the moment we are not going to support setting the timezone via the
  * environment variables. The problem is that various V8 platform backends
  * deal with timezone in different ways. The windows platform backend caches
@@ -63,7 +83,20 @@ process.env.TZ = 'Europe/Amsterdam';
 
 // time difference between Greenwich and Amsterdam is +2 hours in the summer
 date = new Date('Fri, 10 Sep 1982 03:15:00 GMT');
-assert.equal(3, date.getUTCHours());
-assert.equal(5, date.getHours());
+assert.strictEqual(3, date.getUTCHours());
+assert.strictEqual(5, date.getHours());
 */
-/* eslint-enable max-len */
+
+// Environment variables should be case-insensitive on Windows, and
+// case-sensitive on other platforms.
+process.env.TEST = 'test';
+assert.strictEqual(process.env.TEST, 'test');
+// Check both mixed case and lower case, to avoid any regressions that might
+// simply convert input to lower case.
+if (common.isWindows) {
+  assert.strictEqual(process.env.test, 'test');
+  assert.strictEqual(process.env.teST, 'test');
+} else {
+  assert.strictEqual(process.env.test, undefined);
+  assert.strictEqual(process.env.teST, undefined);
+}

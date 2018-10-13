@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include "base/trace_event/common/trace_event_common.h"
+#include "include/v8-platform.h"
 #include "src/base/platform/platform.h"
 
 namespace v8 {
@@ -101,7 +102,7 @@ void JSONTraceWriter::AppendArgValue(uint8_t type,
     case TRACE_VALUE_TYPE_STRING:
     case TRACE_VALUE_TYPE_COPY_STRING:
       if (value.as_string == nullptr) {
-        stream_ << "\"NULL\"";
+        stream_ << "\"nullptr\"";
       } else {
         WriteJSONStringToStream(value.as_string, stream_);
       }
@@ -112,8 +113,18 @@ void JSONTraceWriter::AppendArgValue(uint8_t type,
   }
 }
 
-JSONTraceWriter::JSONTraceWriter(std::ostream& stream) : stream_(stream) {
-  stream_ << "{\"traceEvents\":[";
+void JSONTraceWriter::AppendArgValue(ConvertableToTraceFormat* value) {
+  std::string arg_stringified;
+  value->AppendAsTraceFormat(&arg_stringified);
+  stream_ << arg_stringified;
+}
+
+JSONTraceWriter::JSONTraceWriter(std::ostream& stream)
+    : JSONTraceWriter(stream, "traceEvents") {}
+
+JSONTraceWriter::JSONTraceWriter(std::ostream& stream, const std::string& tag)
+    : stream_(stream) {
+  stream_ << "{\"" << tag << "\":[";
 }
 
 JSONTraceWriter::~JSONTraceWriter() { stream_ << "]}"; }
@@ -143,10 +154,16 @@ void JSONTraceWriter::AppendTraceEvent(TraceObject* trace_event) {
   const char** arg_names = trace_event->arg_names();
   const uint8_t* arg_types = trace_event->arg_types();
   TraceObject::ArgValue* arg_values = trace_event->arg_values();
+  std::unique_ptr<v8::ConvertableToTraceFormat>* arg_convertables =
+      trace_event->arg_convertables();
   for (int i = 0; i < trace_event->num_args(); ++i) {
     if (i > 0) stream_ << ",";
     stream_ << "\"" << arg_names[i] << "\":";
-    AppendArgValue(arg_types[i], arg_values[i]);
+    if (arg_types[i] == TRACE_VALUE_TYPE_CONVERTABLE) {
+      AppendArgValue(arg_convertables[i].get());
+    } else {
+      AppendArgValue(arg_types[i], arg_values[i]);
+    }
   }
   stream_ << "}}";
   // TODO(fmeawad): Add support for Flow Events.
@@ -156,6 +173,11 @@ void JSONTraceWriter::Flush() {}
 
 TraceWriter* TraceWriter::CreateJSONTraceWriter(std::ostream& stream) {
   return new JSONTraceWriter(stream);
+}
+
+TraceWriter* TraceWriter::CreateJSONTraceWriter(std::ostream& stream,
+                                                const std::string& tag) {
+  return new JSONTraceWriter(stream, tag);
 }
 
 }  // namespace tracing

@@ -1,11 +1,12 @@
 'use strict';
-var common = require('../common');
-var net = require('net');
+const common = require('../common');
+const net = require('net');
 
-common.refreshTmpDir();
+// This test should end immediately after `unref` is called
 
-var s = net.Server();
+const tmpdir = require('../common/tmpdir');
+tmpdir.refresh();
+
+const s = net.Server();
 s.listen(common.PIPE);
 s.unref();
-
-setTimeout(common.fail, 1000).unref();

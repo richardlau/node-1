@@ -1,9 +1,8 @@
 'use strict';
 
-require('../common');
+const common = require('../common');
 const assert = require('assert');
 const buffer = require('buffer');
-const Buffer = buffer.Buffer;
 const SlowBuffer = buffer.SlowBuffer;
 
 const ones = [1, 1, 1, 1];
@@ -35,7 +34,9 @@ try {
   assert.strictEqual(
     SlowBuffer(buffer.kMaxLength).length, buffer.kMaxLength);
 } catch (e) {
-  assert.equal(e.message, 'Array buffer allocation failed');
+  // Don't match on message as it is from the JavaScript engine. V8 and
+  // ChakraCore provide different messages.
+  assert.strictEqual(e.name, 'RangeError');
 }
 
 // should work with number-coercible values
@@ -49,12 +50,22 @@ assert.strictEqual(SlowBuffer({}).length, 0);
 assert.strictEqual(SlowBuffer('string').length, 0);
 
 // should throw with invalid length
+const bufferMaxSizeMsg = common.expectsError({
+  code: 'ERR_INVALID_OPT_VALUE',
+  type: RangeError,
+  message: /^The value "[^"]*" is invalid for option "size"$/
+}, 2);
 assert.throws(function() {
   SlowBuffer(Infinity);
-}, 'invalid Buffer length');
-assert.throws(function() {
+}, bufferMaxSizeMsg);
+common.expectsError(function() {
   SlowBuffer(-1);
-}, 'invalid Buffer length');
+}, {
+  code: 'ERR_INVALID_OPT_VALUE',
+  type: RangeError,
+  message: 'The value "-1" is invalid for option "size"'
+});
+
 assert.throws(function() {
   SlowBuffer(buffer.kMaxLength + 1);
-}, 'invalid Buffer length');
+}, bufferMaxSizeMsg);

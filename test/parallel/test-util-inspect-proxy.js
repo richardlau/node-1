@@ -1,10 +1,12 @@
+// Flags: --expose-internals
 'use strict';
 
 require('../common');
 const assert = require('assert');
 const util = require('util');
-const processUtil = process.binding('util');
-const opts = {showProxy: true};
+const { internalBinding } = require('internal/test/binding');
+const processUtil = internalBinding('util');
+const opts = { showProxy: true };
 
 const target = {};
 const handler = {
@@ -13,7 +15,7 @@ const handler = {
 const proxyObj = new Proxy(target, handler);
 
 // Inspecting the proxy should not actually walk it's properties
-assert.doesNotThrow(() => util.inspect(proxyObj, opts));
+util.inspect(proxyObj, opts);
 
 // getProxyDetails is an internal method, not intended for public use.
 // This is here to test that the internals are working correctly.
@@ -31,7 +33,8 @@ assert.strictEqual(processUtil.getProxyDetails({}), undefined);
 // and the get function on the handler object defined above
 // is actually invoked.
 assert.throws(
-  () => util.inspect(proxyObj)
+  () => util.inspect(proxyObj),
+  /^Error: Getter should not be called$/
 );
 
 // Yo dawg, I heard you liked Proxy so I put a Proxy
@@ -47,14 +50,20 @@ const expected1 = 'Proxy [ {}, {} ]';
 const expected2 = 'Proxy [ Proxy [ {}, {} ], {} ]';
 const expected3 = 'Proxy [ Proxy [ Proxy [ {}, {} ], {} ], Proxy [ {}, {} ] ]';
 const expected4 = 'Proxy [ Proxy [ {}, {} ], Proxy [ Proxy [ {}, {} ], {} ] ]';
-const expected5 = 'Proxy [ Proxy [ Proxy [ Proxy [Object], {} ],' +
+const expected5 = 'Proxy [ Proxy [ Proxy [ Proxy [ {}, {} ], {} ],' +
                   ' Proxy [ {}, {} ] ],\n  Proxy [ Proxy [ {}, {} ]' +
-                  ', Proxy [ Proxy [Object], {} ] ] ]';
-const expected6 = 'Proxy [ Proxy [ Proxy [ Proxy [Object], Proxy [Object]' +
-                  ' ],\n    Proxy [ Proxy [Object], Proxy [Object] ] ],\n' +
-                  '  Proxy [ Proxy [ Proxy [Object], Proxy [Object] ],\n' +
-                  '    Proxy [ Proxy [Object], Proxy [Object] ] ] ]';
-assert.strictEqual(util.inspect(proxy1, opts), expected1);
+                  ', Proxy [ Proxy [ {}, {} ], {} ] ] ]';
+const expected6 = 'Proxy [ Proxy [ Proxy [ Proxy [ Proxy [ {}, {} ], {} ], ' +
+                    'Proxy [ {}, {} ] ],\n' +
+                  '    Proxy [ Proxy [ {}, {} ], ' +
+                    'Proxy [ Proxy [ {}, {} ], {} ] ] ],\n' +
+                  '  Proxy [ Proxy [ Proxy [ Proxy [ {}, {} ], {} ], ' +
+                    'Proxy [ {}, {} ] ],\n' +
+                  '    Proxy [ Proxy [ {}, {} ], ' +
+                    'Proxy [ Proxy [ {}, {} ], {} ] ] ] ]';
+assert.strictEqual(
+  util.inspect(proxy1, { showProxy: true, depth: null }),
+  expected1);
 assert.strictEqual(util.inspect(proxy2, opts), expected2);
 assert.strictEqual(util.inspect(proxy3, opts), expected3);
 assert.strictEqual(util.inspect(proxy4, opts), expected4);

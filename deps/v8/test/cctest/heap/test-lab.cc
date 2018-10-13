@@ -5,19 +5,19 @@
 #include <vector>
 
 #include "src/globals.h"
-#include "src/heap/heap.h"
-#include "src/heap/spaces.h"
+#include "src/heap/heap-inl.h"
 #include "src/heap/spaces-inl.h"
+#include "src/objects.h"
 #include "test/cctest/cctest.h"
 
 namespace v8 {
 namespace internal {
+namespace heap {
 
 static Address AllocateLabBackingStore(Heap* heap, intptr_t size_in_bytes) {
   AllocationResult result = heap->old_space()->AllocateRaw(
       static_cast<int>(size_in_bytes), kDoubleAligned);
-  Object* obj = result.ToObjectChecked();
-  Address adr = HeapObject::cast(obj)->address();
+  Address adr = result.ToObjectChecked()->address();
   return adr;
 }
 
@@ -25,7 +25,7 @@ static Address AllocateLabBackingStore(Heap* heap, intptr_t size_in_bytes) {
 static void VerifyIterable(v8::internal::Address base,
                            v8::internal::Address limit,
                            std::vector<intptr_t> expected_size) {
-  CHECK_LE(reinterpret_cast<intptr_t>(base), reinterpret_cast<intptr_t>(limit));
+  CHECK_LE(base, limit);
   HeapObject* object = nullptr;
   size_t counter = 0;
   while (base < limit) {
@@ -281,5 +281,6 @@ TEST(AllocateAligned) {
 }
 #endif  // V8_HOST_ARCH_32_BIT
 
+}  // namespace heap
 }  // namespace internal
 }  // namespace v8

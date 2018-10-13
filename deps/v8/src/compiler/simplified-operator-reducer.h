@@ -5,7 +5,9 @@
 #ifndef V8_COMPILER_SIMPLIFIED_OPERATOR_REDUCER_H_
 #define V8_COMPILER_SIMPLIFIED_OPERATOR_REDUCER_H_
 
+#include "src/base/compiler-specific.h"
 #include "src/compiler/graph-reducer.h"
+#include "src/globals.h"
 
 namespace v8 {
 namespace internal {
@@ -21,10 +23,16 @@ class JSGraph;
 class MachineOperatorBuilder;
 class SimplifiedOperatorBuilder;
 
-class SimplifiedOperatorReducer final : public AdvancedReducer {
+class V8_EXPORT_PRIVATE SimplifiedOperatorReducer final
+    : public NON_EXPORTED_BASE(AdvancedReducer) {
  public:
-  SimplifiedOperatorReducer(Editor* editor, JSGraph* jsgraph);
+  SimplifiedOperatorReducer(Editor* editor, JSGraph* jsgraph,
+                            JSHeapBroker* js_heap_broker);
   ~SimplifiedOperatorReducer() final;
+
+  const char* reducer_name() const override {
+    return "SimplifiedOperatorReducer";
+  }
 
   Reduction Reduce(Node* node) final;
 
@@ -44,11 +52,14 @@ class SimplifiedOperatorReducer final : public AdvancedReducer {
   Factory* factory() const;
   Graph* graph() const;
   Isolate* isolate() const;
-  JSGraph* jsgraph() const { return jsgraph_; }
   MachineOperatorBuilder* machine() const;
   SimplifiedOperatorBuilder* simplified() const;
 
+  JSGraph* jsgraph() const { return jsgraph_; }
+  JSHeapBroker* js_heap_broker() const { return js_heap_broker_; }
+
   JSGraph* const jsgraph_;
+  JSHeapBroker* const js_heap_broker_;
 
   DISALLOW_COPY_AND_ASSIGN(SimplifiedOperatorReducer);
 };

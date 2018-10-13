@@ -32,6 +32,7 @@
     'msvs_use_common_release': 0,
     'clang%': 0,
     'asan%': 0,
+    'cfi_vptr%': 0,
     'lsan%': 0,
     'msan%': 0,
     'tsan%': 0,
@@ -57,6 +58,9 @@
     # Similar to the ARM hard float ABI but on MIPS.
     'v8_use_mips_abi_hardfloat%': 'true',
 
+    # MIPS MSA support
+    'mips_use_msa%': 0,
+
     # Print to stdout on Android.
     'v8_android_log_stdout%': 0,
 
@@ -74,7 +78,6 @@
     # Chrome needs this definition unconditionally. For standalone V8 builds,
     # it's handled in gypfiles/standalone.gypi.
     'want_separate_host_toolset%': 1,
-    'want_separate_host_toolset_mkpeephole%': 1,
 
     # Toolset the shell binary should be compiled for. Possible values are
     # 'host' and 'target'.
@@ -129,9 +132,6 @@
       }],
     ],
 
-    # Link-Time Optimizations
-    'use_lto%': 0,
-
     # Indicates if gcmole tools are downloaded by a hook.
     'gcmole%': 0,
   },
@@ -148,7 +148,7 @@
         'host_cxx_is_biarch%': 0,
       },
     }],
-    ['target_arch=="ia32" or target_arch=="x64" or target_arch=="x87" or \
+    ['target_arch=="ia32" or target_arch=="x64" or \
       target_arch=="ppc" or target_arch=="ppc64" or target_arch=="s390" or \
       target_arch=="s390x" or clang==1', {
       'variables': {
@@ -281,17 +281,6 @@
                   }],
                 ],
               }],
-              # Disable GCC LTO for v8
-              # v8 is optimized for speed. Because GCC LTO merges flags at link
-              # time, we disable LTO to prevent any -O2 flags from taking
-              # precedence over v8's -Os flag. However, LLVM LTO does not work
-              # this way so we keep LTO enabled under LLVM.
-              ['clang==0 and use_lto==1', {
-                'cflags!': [
-                  '-flto',
-                  '-ffat-lto-objects',
-                ],
-              }],
             ],
           }],  # _toolset=="target"
         ],
@@ -315,6 +304,8 @@
             'defines': [
               'V8_TARGET_ARCH_S390_LE_SIM',
             ],
+          }, {
+            'cflags': [ '-march=z196' ],
           }],
           ],
       }],  # s390
@@ -355,12 +346,6 @@
           'V8_TARGET_ARCH_IA32',
         ],
       }],  # v8_target_arch=="ia32"
-      ['v8_target_arch=="x87"', {
-        'defines': [
-          'V8_TARGET_ARCH_X87',
-        ],
-        'cflags': ['-march=i586'],
-      }],  # v8_target_arch=="x87"
       ['v8_target_arch=="mips" or v8_target_arch=="mipsel" \
         or v8_target_arch=="mips64" or v8_target_arch=="mips64el"', {
         'target_conditions': [
@@ -457,6 +442,9 @@
                     'cflags': ['-mips32r6'],
                     'ldflags': ['-mips32r6'],
                   }],
+                  ['mips_arch_variant=="r6" and mips_use_msa==1', {
+                    'defines': [ '_MIPS_MSA' ],
+                  }],
                   ['mips_arch_variant=="r2"', {
                     'conditions': [
                       [ 'mips_fpu_mode=="fp64"', {
@@ -525,6 +513,9 @@
                       'FPU_MODE_FP64',
                     ],
                   }],
+                  ['mips_arch_variant=="r6" and mips_use_msa==1', {
+                    'defines': [ '_MIPS_MSA' ],
+                  }],
                   ['mips_arch_variant=="r2"', {
                     'conditions': [
                       [ 'mips_fpu_mode=="fp64"', {
@@ -575,6 +566,9 @@
                   '_MIPS_ARCH_MIPS32R6',
                   'FPU_MODE_FP64',
                 ],
+              }],
+              ['mips_arch_variant=="r6" and mips_use_msa==1', {
+                'defines': [ '_MIPS_MSA' ],
               }],
               ['mips_arch_variant=="r2"', {
                 'conditions': [
@@ -658,6 +652,9 @@
                     'cflags': ['-mips32r6'],
                     'ldflags': ['-mips32r6'],
                   }],
+                  ['mips_arch_variant=="r6" and mips_use_msa==1', {
+                    'defines': [ '_MIPS_MSA' ],
+                  }],
                   ['mips_arch_variant=="r2"', {
                     'conditions': [
                       [ 'mips_fpu_mode=="fp64"', {
@@ -739,6 +736,9 @@
                       'FPU_MODE_FP64',
                     ],
                   }],
+                  ['mips_arch_variant=="r6" and mips_use_msa==1', {
+                    'defines': [ '_MIPS_MSA' ],
+                  }],
                   ['mips_arch_variant=="r2"', {
                     'conditions': [
                       [ 'mips_fpu_mode=="fp64"', {
@@ -795,6 +795,9 @@
                   '_MIPS_ARCH_MIPS32R6',
                   'FPU_MODE_FP64',
                 ],
+              }],
+              ['mips_arch_variant=="r6" and mips_use_msa==1', {
+                'defines': [ '_MIPS_MSA' ],
               }],
               ['mips_arch_variant=="r2"', {
                 'conditions': [
@@ -895,6 +898,9 @@
                     'cflags': ['-mips64r6', '-mabi=64'],
                     'ldflags': ['-mips64r6', '-mabi=64'],
                   }],
+                  ['mips_arch_variant=="r6" and mips_use_msa==1', {
+                    'defines': [ '_MIPS_MSA' ],
+                  }],
                   ['mips_arch_variant=="r2"', {
                     'defines': ['_MIPS_ARCH_MIPS64R2',],
                     'conditions': [
@@ -913,6 +919,9 @@
                   ['mips_arch_variant=="r6"', {
                     'defines': ['_MIPS_ARCH_MIPS64R6',],
                   }],
+                  ['mips_arch_variant=="r6" and mips_use_msa==1', {
+                    'defines': [ '_MIPS_MSA' ],
+                  }],
                   ['mips_arch_variant=="r2"', {
                     'defines': ['_MIPS_ARCH_MIPS64R2',],
                   }],
@@ -924,6 +933,9 @@
             'conditions': [
               ['mips_arch_variant=="r6"', {
                 'defines': ['_MIPS_ARCH_MIPS64R6',],
+              }],
+              ['mips_arch_variant=="r6" and mips_use_msa==1', {
+                'defines': [ '_MIPS_MSA' ],
               }],
               ['mips_arch_variant=="r2"', {
                 'defines': ['_MIPS_ARCH_MIPS64R2',],
@@ -989,8 +1001,6 @@
         #       present in VS 2003 and earlier.
         'msvs_disabled_warnings': [4351],
         'msvs_configuration_attributes': {
-          'OutputDirectory': '<(DEPTH)\\build\\$(ConfigurationName)',
-          'IntermediateDirectory': '$(OutDir)\\obj\\$(ProjectName)',
           'CharacterSet': '1',
         },
       }],
@@ -1021,9 +1031,8 @@
       ['(OS=="linux" or OS=="freebsd" or OS=="openbsd" or OS=="solaris" \
          or OS=="netbsd" or OS=="mac" or OS=="android" or OS=="qnx") and \
         (v8_target_arch=="arm" or v8_target_arch=="ia32" or \
-         v8_target_arch=="x87" or v8_target_arch=="mips" or \
-         v8_target_arch=="mipsel" or v8_target_arch=="ppc" or \
-         v8_target_arch=="s390")', {
+         v8_target_arch=="mips" or v8_target_arch=="mipsel" or \
+         v8_target_arch=="ppc" or v8_target_arch=="s390")', {
         'target_conditions': [
           ['_toolset=="host"', {
             'conditions': [
@@ -1118,7 +1127,7 @@
             'ldflags': [ '-Wl,-bmaxdata:0x60000000/dsa' ],
           }],
           [ 'v8_target_arch=="ppc64"', {
-            'cflags': [ '-maix64' ],
+            'cflags': [ '-maix64', '-fdollars-in-identifiers' ],
             'ldflags': [ '-maix64 -Wl,-bbigtoc' ],
           }],
         ],
@@ -1246,7 +1255,9 @@
           'OBJECT_PRINT',
           'VERIFY_HEAP',
           'DEBUG',
-          'TRACE_MAPS'
+          'V8_TRACE_MAPS',
+          'V8_ENABLE_ALLOCATION_TIMEOUT',
+          'V8_ENABLE_FORCE_SLOW_PATH',
         ],
         'conditions': [
           ['OS=="linux" or OS=="freebsd" or OS=="openbsd" or OS=="netbsd" or \
@@ -1285,9 +1296,7 @@
               }],
             ],
           }],
-          # TODO(pcc): Re-enable in LTO builds once we've fixed the intermittent
-          # link failures (crbug.com/513074).
-          ['linux_use_gold_flags==1 and use_lto==0', {
+          ['linux_use_gold_flags==1', {
             'target_conditions': [
               ['_toolset=="target"', {
                 'ldflags': [
@@ -1416,5 +1425,24 @@
         }],
       ],
     },  # configurations
+    'msvs_disabled_warnings': [
+      4245,  # Conversion with signed/unsigned mismatch.
+      4267,  # Conversion with possible loss of data.
+      4324,  # Padding structure due to alignment.
+      4701,  # Potentially uninitialized local variable.
+      4702,  # Unreachable code.
+      4703,  # Potentially uninitialized local pointer variable.
+      4709,  # Comma operator within array index expr (bugged).
+      4714,  # Function marked forceinline not inlined.
+
+      # MSVC assumes that control can get past an exhaustive switch and then
+      # warns if there's no return there (see https://crbug.com/v8/7658)
+      4715,  # Not all control paths return a value.
+
+      4718,  # Recursive call has no side-effect.
+      4723,  # https://crbug.com/v8/7771
+      4724,  # https://crbug.com/v8/7771
+      4800,  # Forcing value to bool.
+    ],
   },  # target_defaults
 }

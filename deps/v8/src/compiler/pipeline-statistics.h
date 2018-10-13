@@ -10,7 +10,7 @@
 
 #include "src/base/platform/elapsed-timer.h"
 #include "src/compilation-statistics.h"
-#include "src/compiler/zone-pool.h"
+#include "src/compiler/zone-stats.h"
 
 namespace v8 {
 namespace internal {
@@ -20,7 +20,8 @@ class PhaseScope;
 
 class PipelineStatistics : public Malloced {
  public:
-  PipelineStatistics(CompilationInfo* info, ZonePool* zone_pool);
+  PipelineStatistics(OptimizedCompilationInfo* info,
+                     CompilationStatistics* turbo_stats, ZoneStats* zone_stats);
   ~PipelineStatistics();
 
   void BeginPhaseKind(const char* phase_kind_name);
@@ -39,7 +40,7 @@ class PipelineStatistics : public Malloced {
     void End(PipelineStatistics* pipeline_stats,
              CompilationStatistics::BasicStats* diff);
 
-    std::unique_ptr<ZonePool::StatsScope> scope_;
+    std::unique_ptr<ZoneStats::StatsScope> scope_;
     base::ElapsedTimer timer_;
     size_t outer_zone_initial_size_;
     size_t allocated_bytes_at_start_;
@@ -55,9 +56,8 @@ class PipelineStatistics : public Malloced {
   void BeginPhase(const char* name);
   void EndPhase();
 
-  Isolate* isolate_;
   Zone* outer_zone_;
-  ZonePool* zone_pool_;
+  ZoneStats* zone_stats_;
   CompilationStatistics* compilation_stats_;
   std::string function_name_;
 
@@ -97,4 +97,4 @@ class PhaseScope {
 }  // namespace internal
 }  // namespace v8
 
-#endif
+#endif  // V8_COMPILER_PIPELINE_STATISTICS_H_

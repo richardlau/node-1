@@ -5,15 +5,15 @@
 #include "src/field-type.h"
 
 #include "src/handles-inl.h"
+#include "src/objects-inl.h"
 #include "src/ostreams.h"
-#include "src/types.h"
 
 namespace v8 {
 namespace internal {
 
 // static
 FieldType* FieldType::None() {
-  // Do not Smi::FromInt(0) here or for Any(), as that may translate
+  // Do not Smi::kZero here or for Any(), as that may translate
   // as `nullptr` which is not a valid value for `this`.
   return reinterpret_cast<FieldType*>(Smi::FromInt(2));
 }
@@ -49,14 +49,13 @@ FieldType* FieldType::cast(Object* object) {
 
 bool FieldType::IsClass() { return this->IsMap(); }
 
-Handle<i::Map> FieldType::AsClass() {
+Map* FieldType::AsClass() {
   DCHECK(IsClass());
-  i::Map* map = Map::cast(this);
-  return handle(map, map->GetIsolate());
+  return Map::cast(this);
 }
 
 bool FieldType::NowStable() {
-  return !this->IsClass() || this->AsClass()->is_stable();
+  return !this->IsClass() || AsClass()->is_stable();
 }
 
 bool FieldType::NowIs(FieldType* other) {
@@ -71,13 +70,6 @@ bool FieldType::NowIs(FieldType* other) {
 
 bool FieldType::NowIs(Handle<FieldType> other) { return NowIs(*other); }
 
-Type* FieldType::Convert(Zone* zone) {
-  if (IsAny()) return Type::NonInternal();
-  if (IsNone()) return Type::None();
-  DCHECK(IsClass());
-  return Type::Class(AsClass(), zone);
-}
-
 void FieldType::PrintTo(std::ostream& os) {
   if (IsAny()) {
     os << "Any";
@@ -85,8 +77,15 @@ void FieldType::PrintTo(std::ostream& os) {
     os << "None";
   } else {
     DCHECK(IsClass());
-    os << "Class(" << static_cast<void*>(*AsClass()) << ")";
+    os << "Class(" << static_cast<void*>(AsClass()) << ")";
   }
+}
+
+bool FieldType::NowContains(Object* value) {
+  if (this == Any()) return true;
+  if (this == None()) return false;
+  if (!value->IsHeapObject()) return false;
+  return HeapObject::cast(value)->map() == Map::cast(this);
 }
 
 }  // namespace internal

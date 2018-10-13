@@ -1,6 +1,8 @@
+// © 2016 and later: Unicode, Inc. and others.
+// License & terms of use: http://www.unicode.org/copyright.html
 /*
 *******************************************************************************
-* Copyright (C) 1997-2015, International Business Machines Corporation and
+* Copyright (C) 1997-2016, International Business Machines Corporation and
 * others. All Rights Reserved.
 *******************************************************************************
 *
@@ -458,6 +460,8 @@ TimeZone::detectHostTimeZone()
 
     uprv_tzset(); // Initialize tz... system data
 
+    uprv_tzname_clear_cache();
+
     // Get the timezone ID from the host.  This function should do
     // any required host-specific remapping; e.g., on Windows this
     // function maps the Date and Time control panel setting to an
@@ -735,8 +739,7 @@ private:
         len = mapLen;
     }
 
-    UBool getID(int32_t i) {
-        UErrorCode ec = U_ZERO_ERROR;
+    UBool getID(int32_t i, UErrorCode& ec) {
         int32_t idLen = 0;
         const UChar* id = NULL;
         UResourceBundle *top = ures_openDirect(0, kZONEINFO, &ec);
@@ -926,7 +929,7 @@ public:
 
     virtual const UnicodeString* snext(UErrorCode& status) {
         if (U_SUCCESS(status) && map != NULL && pos < len) {
-            getID(map[pos]);
+            getID(map[pos], status);
             ++pos;
             return &unistr;
         }

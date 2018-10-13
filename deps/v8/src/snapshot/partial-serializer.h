@@ -13,14 +13,17 @@ namespace internal {
 
 class StartupSerializer;
 
-class PartialSerializer : public Serializer {
+class PartialSerializer : public Serializer<> {
  public:
-  PartialSerializer(Isolate* isolate, StartupSerializer* startup_serializer);
+  PartialSerializer(Isolate* isolate, StartupSerializer* startup_serializer,
+                    v8::SerializeEmbedderFieldsCallback callback);
 
   ~PartialSerializer() override;
 
   // Serialize the objects reachable from a single object pointer.
-  void Serialize(Object** o);
+  void Serialize(Context** o, bool include_global_proxy);
+
+  bool can_be_rehashed() const { return can_be_rehashed_; }
 
  private:
   void SerializeObject(HeapObject* o, HowToCode how_to_code,
@@ -28,7 +31,17 @@ class PartialSerializer : public Serializer {
 
   bool ShouldBeInThePartialSnapshotCache(HeapObject* o);
 
+  void SerializeEmbedderFields();
+
+  void CheckRehashability(HeapObject* obj);
+
   StartupSerializer* startup_serializer_;
+  std::vector<JSObject*> embedder_field_holders_;
+  v8::SerializeEmbedderFieldsCallback serialize_embedder_fields_;
+  // Indicates whether we only serialized hash tables that we can rehash.
+  // TODO(yangguo): generalize rehashing, and remove this flag.
+  bool can_be_rehashed_;
+  Context* context_;
   DISALLOW_COPY_AND_ASSIGN(PartialSerializer);
 };
 

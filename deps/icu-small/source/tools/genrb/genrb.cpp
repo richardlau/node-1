@@ -1,3 +1,5 @@
+// © 2016 and later: Unicode, Inc. and others.
+// License & terms of use: http://www.unicode.org/copyright.html
 /*
 *******************************************************************************
 *
@@ -650,7 +652,7 @@ processFile(const char *filename, const char *cp,
         goto finish;
     }
     if (ucbuf == NULL || U_FAILURE(status)) {
-        fprintf(stderr, "An error occured processing file %s. Error: %s\n",
+        fprintf(stderr, "An error occurred processing file %s. Error: %s\n",
                 openFileName == NULL ? filename : openFileName, u_errorName(status));
         goto finish;
     }

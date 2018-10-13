@@ -21,6 +21,10 @@ Set access level on published packages
 
 Add a registry user account
 
+### npm-audit(1)
+
+Run a security audit
+
 ### npm-bin(1)
 
 Display npm bin folder
@@ -40,6 +44,10 @@ REMOVED
 ### npm-cache(1)
 
 Manipulates packages cache
+
+### npm-ci(1)
+
+Install a project with a clean slate
 
 ### npm-completion(1)
 
@@ -65,6 +73,10 @@ Modify package distribution tags
 
 Docs for a package in a web browser maybe
 
+### npm-doctor(1)
+
+Check your environments
+
 ### npm-edit(1)
 
 Edit an installed package
@@ -81,9 +93,17 @@ Search npm help documentation
 
 Get help on npm
 
+### npm-hook(1)
+
+Manage registry hooks
+
 ### npm-init(1)
 
-Interactively create a package.json file
+create a package.json file
+
+### npm-install-ci-test(1)
+
+Install a project with a clean slate and run tests
 
 ### npm-install-test(1)
 
@@ -125,6 +145,10 @@ Ping npm registry
 
 Display prefix
 
+### npm-profile(1)
+
+Change settings on your registry profile
+
 ### npm-prune(1)
 
 Remove extraneous packages
@@ -159,7 +183,7 @@ Search for packages
 
 ### npm-shrinkwrap(1)
 
-Lock down dependency versions
+Lock down dependency versions for publication
 
 ### npm-star(1)
 
@@ -177,10 +201,6 @@ Start a package
 
 Stop a package
 
-### npm-tag(1)
-
-Tag a published version
-
 ### npm-team(1)
 
 Manage organization teams and team memberships
@@ -188,6 +208,10 @@ Manage organization teams and team memberships
 ### npm-test(1)
 
 Test a package
+
+### npm-token(1)
+
+Manage your authentication tokens
 
 ### npm-uninstall(1)
 
@@ -225,9 +249,21 @@ File system structures npm uses
 
 Folder Structures Used by npm
 
+### npm-package-locks(5)
+
+An explanation of npm lockfiles
+
+### npm-shrinkwrap.json(5)
+
+A publishable lockfile
+
 ### npmrc(5)
 
 The npm config files
+
+### package-lock.json(5)
+
+A manifestation of the manifest
 
 ### package.json(5)
 

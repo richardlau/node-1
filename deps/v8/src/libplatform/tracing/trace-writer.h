@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef SRC_LIBPLATFORM_TRACING_TRACE_WRITER_H_
-#define SRC_LIBPLATFORM_TRACING_TRACE_WRITER_H_
+#ifndef V8_LIBPLATFORM_TRACING_TRACE_WRITER_H_
+#define V8_LIBPLATFORM_TRACING_TRACE_WRITER_H_
 
 #include "include/libplatform/v8-tracing.h"
 
@@ -14,12 +14,14 @@ namespace tracing {
 class JSONTraceWriter : public TraceWriter {
  public:
   explicit JSONTraceWriter(std::ostream& stream);
+  JSONTraceWriter(std::ostream& stream, const std::string& tag);
   ~JSONTraceWriter();
   void AppendTraceEvent(TraceObject* trace_event) override;
   void Flush() override;
 
  private:
   void AppendArgValue(uint8_t type, TraceObject::ArgValue value);
+  void AppendArgValue(v8::ConvertableToTraceFormat*);
 
   std::ostream& stream_;
   bool append_comma_ = false;
@@ -29,4 +31,4 @@ class JSONTraceWriter : public TraceWriter {
 }  // namespace platform
 }  // namespace v8
 
-#endif  // SRC_LIBPLATFORM_TRACING_TRACE_WRITER_H_
+#endif  // V8_LIBPLATFORM_TRACING_TRACE_WRITER_H_

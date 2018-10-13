@@ -5,78 +5,85 @@
 #ifndef V8_COMPILER_DISPATCHER_COMPILER_DISPATCHER_JOB_H_
 #define V8_COMPILER_DISPATCHER_COMPILER_DISPATCHER_JOB_H_
 
-#include <memory>
-
-#include "src/base/macros.h"
+#include "src/contexts.h"
 #include "src/handles.h"
-#include "testing/gtest/include/gtest/gtest_prod.h"
 
 namespace v8 {
 namespace internal {
 
-class CompilationInfo;
-class Isolate;
-class JSFunction;
-class ParseInfo;
-class Parser;
-class String;
-class UnicodeCache;
-class Utf16CharacterStream;
-class Zone;
+class SharedFunctionInfo;
 
-enum class CompileJobStatus {
-  kInitial,
-  kReadyToParse,
-  kParsed,
-  kReadyToCompile,
-  kFailed,
-  kDone,
-};
+class UnoptimizedCompileJob;
 
-class CompilerDispatcherJob {
+class V8_EXPORT_PRIVATE CompilerDispatcherJob {
  public:
-  CompilerDispatcherJob(Isolate* isolate, Handle<JSFunction> function,
-                        size_t max_stack_size);
-  ~CompilerDispatcherJob();
+  enum class Type { kUnoptimizedCompile };
 
-  CompileJobStatus status() const { return status_; }
-  bool can_parse_on_background_thread() const {
-    return can_parse_on_background_thread_;
+  enum class Status {
+    kInitial,
+    kPrepared,
+    kCompiled,
+    kHasErrorsToReport,
+    kDone,
+    kFailed,
+  };
+
+  CompilerDispatcherJob(Type type) : type_(type), status_(Status::kInitial) {}
+
+  virtual ~CompilerDispatcherJob() {}
+
+  Type type() const { return type_; }
+
+  // Returns the current status of the compile
+  Status status() const { return status_; }
+
+  // Returns true if this CompilerDispatcherJob has finished (either with a
+  // success or a failure).
+  bool IsFinished() const {
+    return status() == Status::kDone || status() == Status::kFailed;
   }
 
-  // Transition from kInitial to kReadyToParse.
-  void PrepareToParseOnMainThread();
+  // Returns true if this CompilerDispatcherJob has failed.
+  bool IsFailed() const { return status() == Status::kFailed; }
 
-  // Transition from kReadyToParse to kParsed.
-  void Parse();
+  // Return true if the next step can be run on any thread.
+  bool NextStepCanRunOnAnyThread() const {
+    return status() == Status::kPrepared;
+  }
 
-  // Transition from kParsed to kReadyToCompile (or kFailed). Returns false
-  // when transitioning to kFailed. In that case, an exception is pending.
-  bool FinalizeParsingOnMainThread();
+  // Casts to implementations.
+  const UnoptimizedCompileJob* AsUnoptimizedCompileJob() const;
 
-  // Transition from any state to kInitial and free all resources.
-  void ResetOnMainThread();
+  // Transition from kInitial to kPrepared. Must only be invoked on the
+  // main thread.
+  virtual void PrepareOnMainThread(Isolate* isolate) = 0;
+
+  // Transition from kPrepared to kCompiled (or kReportErrors).
+  virtual void Compile(bool on_background_thread) = 0;
+
+  // Transition from kCompiled to kDone (or kFailed). Must only be invoked on
+  // the main thread.
+  virtual void FinalizeOnMainThread(Isolate* isolate) = 0;
+
+  // Transition from kReportErrors to kFailed. Must only be invoked on the main
+  // thread.
+  virtual void ReportErrorsOnMainThread(Isolate* isolate) = 0;
+
+  // Free all resources. Must only be invoked on the main thread.
+  virtual void ResetOnMainThread(Isolate* isolate) = 0;
+
+  // Estimate how long the next step will take using the tracer.
+  virtual double EstimateRuntimeOfNextStepInMs() const = 0;
+
+  // Print short description of job. Must only be invoked on the main thread.
+  virtual void ShortPrintOnMainThread() = 0;
+
+ protected:
+  void set_status(Status status) { status_ = status; }
 
  private:
-  FRIEND_TEST(CompilerDispatcherJobTest, ScopeChain);
-
-  CompileJobStatus status_ = CompileJobStatus::kInitial;
-  Isolate* isolate_;
-  Handle<JSFunction> function_;  // Global handle.
-  Handle<String> source_;        // Global handle.
-  size_t max_stack_size_;
-
-  // Members required for parsing.
-  std::unique_ptr<UnicodeCache> unicode_cache_;
-  std::unique_ptr<Zone> zone_;
-  std::unique_ptr<Utf16CharacterStream> character_stream_;
-  std::unique_ptr<ParseInfo> parse_info_;
-  std::unique_ptr<Parser> parser_;
-  std::unique_ptr<DeferredHandles> handles_from_parsing_;
-
-  bool can_parse_on_background_thread_;
-
-  DISALLOW_COPY_AND_ASSIGN(CompilerDispatcherJob);
+  Type type_;
+  Status status_;
 };
 
 }  // namespace internal

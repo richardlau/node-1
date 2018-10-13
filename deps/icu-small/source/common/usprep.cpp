@@ -1,3 +1,5 @@
+// © 2016 and later: Unicode, Inc. and others.
+// License & terms of use: http://www.unicode.org/copyright.html
 /*
  *******************************************************************************
  *
@@ -6,7 +8,7 @@
  *
  *******************************************************************************
  *   file name:  usprep.cpp
- *   encoding:   US-ASCII
+ *   encoding:   UTF-8
  *   tab size:   8 (not used)
  *   indentation:4
  *
@@ -344,10 +346,6 @@ usprep_getProfile(const char* path,
         /* get the options */
         newProfile->doNFKC = (UBool)((newProfile->indexes[_SPREP_OPTIONS] & _SPREP_NORMALIZATION_ON) > 0);
         newProfile->checkBiDi = (UBool)((newProfile->indexes[_SPREP_OPTIONS] & _SPREP_CHECK_BIDI_ON) > 0);
-
-        if(newProfile->checkBiDi) {
-            newProfile->bdp = ubidi_getSingleton();
-        }
 
         LocalMemory<UStringPrepKey> key;
         LocalMemory<char> keyName;
@@ -733,7 +731,7 @@ usprep_prepare(   const UStringPrepProfile* profile,
         }
 
         if(profile->checkBiDi) {
-            direction = ubidi_getClass(profile->bdp, ch);
+            direction = ubidi_getClass(ch);
             if(firstCharDir == U_CHAR_DIRECTION_COUNT){
                 firstCharDir = direction;
             }

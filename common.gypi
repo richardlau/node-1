@@ -9,6 +9,8 @@
     'library%': 'static_library',     # allow override to 'shared_library' for DLL/.so builds
     'component%': 'static_library',   # NB. these names match with what V8 expects
     'msvs_multi_core_compile': '0',   # we do enable multicore compiles, but not using the V8 way
+    'enable_pgo_generate%': '0',
+    'enable_pgo_use%': '0',
     'python%': 'python',
 
     'node_shared%': 'false',
@@ -16,14 +18,22 @@
     'node_use_v8_platform%': 'true',
     'node_use_bundled_v8%': 'true',
     'node_module_version%': '',
+    'node_with_ltcg%': '',
+    'node_use_pch%': 'false',
 
     'node_tag%': '',
     'uv_library%': 'static_library',
+
+    'clang%': 0,
 
     'openssl_fips%': '',
 
     # Default to -O0 for debug builds.
     'v8_optimized_debug%': 0,
+
+    # Reset this number to 0 on major V8 upgrades.
+    # Increment by one for each non-official patch applied to deps/v8.
+    'v8_embedder_string': '-node.4',
 
     # Enable disassembler for `--print-code` v8 options
     'v8_enable_disassembler': 1,
@@ -31,33 +41,60 @@
     # Don't bake anything extra into the snapshot.
     'v8_use_external_startup_data%': 0,
 
+    # Disable V8 untrusted code mitigations.
+    # See https://github.com/v8/v8/wiki/Untrusted-code-mitigations
+    'v8_untrusted_code_mitigations': 'false',
+
+    # Some STL containers (e.g. std::vector) do not preserve ABI compatibility
+    # between debug and non-debug mode.
+    'disable_glibcxx_debug': 1,
+
     # Don't use ICU data file (icudtl.dat) from V8, we use our own.
     'icu_use_data_file_flag%': 0,
 
     'conditions': [
+      ['GENERATOR=="ninja"', {
+        'obj_dir': '<(PRODUCT_DIR)/obj',
+        'conditions': [
+          [ 'build_v8_with_gn=="true"', {
+            'v8_base': '<(PRODUCT_DIR)/obj/deps/v8/gypfiles/v8_monolith.gen/gn/obj/libv8_monolith.a',
+          }, {
+            'v8_base': '<(PRODUCT_DIR)/obj/deps/v8/gypfiles/libv8_base.a',
+          }],
+        ]
+       }, {
+        'obj_dir%': '<(PRODUCT_DIR)/obj.target',
+        'v8_base': '<(PRODUCT_DIR)/obj.target/deps/v8/gypfiles/libv8_base.a',
+      }],
       ['OS == "win"', {
         'os_posix': 0,
         'v8_postmortem_support%': 'false',
+        'obj_dir': '<(PRODUCT_DIR)/obj',
+        'v8_base': '<(PRODUCT_DIR)/lib/v8_libbase.lib',
       }, {
         'os_posix': 1,
         'v8_postmortem_support%': 'true',
       }],
-      ['GENERATOR == "ninja" or OS== "mac"', {
-        'OBJ_DIR': '<(PRODUCT_DIR)/obj',
-        'V8_BASE': '<(PRODUCT_DIR)/libv8_base.a',
-      }, {
-        'OBJ_DIR': '<(PRODUCT_DIR)/obj.target',
-        'V8_BASE': '<(PRODUCT_DIR)/obj.target/deps/v8/src/libv8_base.a',
+      ['OS == "mac"', {
+        'obj_dir%': '<(PRODUCT_DIR)/obj.target',
+        'v8_base': '<(PRODUCT_DIR)/libv8_base.a',
+      }],
+      ['build_v8_with_gn == "true"', {
+        'conditions': [
+          ['GENERATOR == "ninja"', {
+            'v8_base': '<(PRODUCT_DIR)/obj/deps/v8/gypfiles/v8_monolith.gen/gn/obj/libv8_monolith.a',
+          }, {
+            'v8_base': '<(PRODUCT_DIR)/obj.target/v8_monolith/geni/gn/obj/libv8_monolith.a',
+          }],
+        ],
       }],
       ['openssl_fips != ""', {
-        'OPENSSL_PRODUCT': 'libcrypto.a',
+        'openssl_product': '<(STATIC_LIB_PREFIX)crypto<(STATIC_LIB_SUFFIX)',
       }, {
-        'OPENSSL_PRODUCT': 'libopenssl.a',
+        'openssl_product': '<(STATIC_LIB_PREFIX)openssl<(STATIC_LIB_SUFFIX)',
       }],
       ['OS=="mac"', {
         'clang%': 1,
-      }, {
-        'clang%': 0,
       }],
     ],
   },
@@ -69,15 +106,24 @@
         'variables': {
           'v8_enable_handle_zapping': 1,
         },
-        'defines': [ 'DEBUG', '_DEBUG' ],
+        'defines': [ 'DEBUG', '_DEBUG', 'V8_ENABLE_CHECKS' ],
         'cflags': [ '-g', '-O0' ],
         'conditions': [
           ['target_arch=="x64"', {
             'msvs_configuration_platform': 'x64',
           }],
           ['OS=="aix"', {
+            'variables': {'real_os_name': '<!(uname -s)',},
             'cflags': [ '-gxcoff' ],
             'ldflags': [ '-Wl,-bbigtoc' ],
+            'conditions': [
+              ['"<(real_os_name)"=="OS400"', {
+                'ldflags': [
+                  '-Wl,-blibpath:/QOpenSys/pkgs/lib:/QOpenSys/usr/lib',
+                  '-Wl,-brtl',
+                ],
+              }],
+            ],
           }],
           ['OS == "android"', {
             'cflags': [ '-fPIE' ],
@@ -104,6 +150,10 @@
             'MinimalRebuild': 'false',
             'OmitFramePointers': 'false',
             'BasicRuntimeChecks': 3, # /RTC1
+            'MultiProcessorCompilation': 'true',
+            'AdditionalOptions': [
+              '/bigobj', # prevent error C1128 in VS2015
+            ],
           },
           'VCLinkerTool': {
             'LinkIncremental': 2, # enable incremental linking
@@ -129,6 +179,27 @@
           ['OS!="mac" and OS!="win"', {
             'cflags': [ '-fno-omit-frame-pointer' ],
           }],
+          ['OS=="linux"', {
+            'variables': {
+              'pgo_generate': ' -fprofile-generate ',
+              'pgo_use': ' -fprofile-use -fprofile-correction ',
+              'lto': ' -flto=4 -fuse-linker-plugin -ffat-lto-objects ',
+            },
+            'conditions': [
+              ['enable_pgo_generate=="true"', {
+                'cflags': ['<(pgo_generate)'],
+                'ldflags': ['<(pgo_generate)'],
+              },],
+              ['enable_pgo_use=="true"', {
+                'cflags': ['<(pgo_use)'],
+                'ldflags': ['<(pgo_use)'],
+              },],
+              ['enable_lto=="true"', {
+                'cflags': ['<(lto)'],
+                'ldflags': ['<(lto)'],
+              },],
+            ],
+          },],
           ['OS == "android"', {
             'cflags': [ '-fPIE' ],
             'ldflags': [ '-fPIE', '-pie' ]
@@ -146,34 +217,51 @@
                 'RuntimeLibrary': 0 # MultiThreaded (/MT)
               }
             }
+          }],
+          ['node_with_ltcg=="true"', {
+            'msvs_settings': {
+              'VCCLCompilerTool': {
+                'WholeProgramOptimization': 'true' # /GL, whole program optimization, needed for LTCG
+              },
+              'VCLibrarianTool': {
+                'AdditionalOptions': [
+                  '/LTCG:INCREMENTAL', # link time code generation
+                ]
+              },
+              'VCLinkerTool': {
+                'OptimizeReferences': 2, # /OPT:REF
+                'EnableCOMDATFolding': 2, # /OPT:ICF
+                'LinkIncremental': 1, # disable incremental linking
+                'AdditionalOptions': [
+                  '/LTCG:INCREMENTAL', # incremental link-time code generation
+                ]
+              }
+            }
+          }, {
+            'msvs_settings': {
+              'VCCLCompilerTool': {
+                'WholeProgramOptimization': 'false'
+              },
+              'VCLinkerTool': {
+                'LinkIncremental': 2 # enable incremental linking
+              }
+            }
           }]
         ],
         'msvs_settings': {
           'VCCLCompilerTool': {
             'Optimization': 3, # /Ox, full optimization
-            'FavorSizeOrSpeed': 1, # /Ot, favour speed over size
+            'FavorSizeOrSpeed': 1, # /Ot, favor speed over size
             'InlineFunctionExpansion': 2, # /Ob2, inline anything eligible
-            'WholeProgramOptimization': 'true', # /GL, whole program optimization, needed for LTCG
             'OmitFramePointers': 'true',
             'EnableFunctionLevelLinking': 'true',
             'EnableIntrinsicFunctions': 'true',
             'RuntimeTypeInfo': 'false',
+            'MultiProcessorCompilation': 'true',
             'AdditionalOptions': [
-              '/MP', # compile across multiple CPUs
             ],
-          },
-          'VCLibrarianTool': {
-            'AdditionalOptions': [
-              '/LTCG', # link time code generation
-            ],
-          },
-          'VCLinkerTool': {
-            'LinkTimeCodeGeneration': 1, # link-time code generation
-            'OptimizeReferences': 2, # /OPT:REF
-            'EnableCOMDATFolding': 2, # /OPT:ICF
-            'LinkIncremental': 1, # disable incremental linking
-          },
-        },
+          }
+        }
       }
     },
     # Forcibly disable -Werror.  We support a wide range of compilers, it's
@@ -183,14 +271,12 @@
     'msvs_settings': {
       'VCCLCompilerTool': {
         'StringPooling': 'true', # pool string literals
-        'DebugInformationFormat': 3, # Generate a PDB
+        'DebugInformationFormat': 1, # /Z7 embed info in .obj files
         'WarningLevel': 3,
         'BufferSecurityCheck': 'true',
         'ExceptionHandling': 0, # /EHsc
         'SuppressStartupBanner': 'true',
         'WarnAsError': 'false',
-      },
-      'VCLibrarianTool': {
       },
       'VCLinkerTool': {
         'conditions': [
@@ -220,7 +306,20 @@
         'SuppressStartupBanner': 'true',
       },
     },
-    'msvs_disabled_warnings': [4351, 4355, 4800],
+    # Disable warnings:
+    # - "C4251: class needs to have dll-interface"
+    # - "C4275: non-DLL-interface used as base for DLL-interface"
+    #   Over 10k of these warnings are generated when compiling node,
+    #   originating from v8.h. Most of them are false positives.
+    #   See also: https://github.com/nodejs/node/pull/15570
+    #   TODO: re-enable when Visual Studio fixes these upstream.
+    #
+    # - "C4267: conversion from 'size_t' to 'int'"
+    #   Many any originate from our dependencies, and their sheer number
+    #   drowns out other, more legitimate warnings.
+    # - "C4244: conversion from 'type1' to 'type2', possible loss of data"
+    #   Ususaly safe. Disable for `dep`, enable for `src`
+    'msvs_disabled_warnings': [4351, 4355, 4800, 4251, 4275, 4244, 4267],
     'conditions': [
       ['asan == 1 and OS != "mac"', {
         'cflags+': [
@@ -266,17 +365,21 @@
         ],
       }],
       [ 'OS in "linux freebsd openbsd solaris aix"', {
-        'cflags': [ '-pthread', ],
+        'cflags': [ '-pthread' ],
         'ldflags': [ '-pthread' ],
       }],
-      [ 'OS in "linux freebsd openbsd solaris android aix"', {
+      [ 'OS in "linux freebsd openbsd solaris android aix cloudabi"', {
         'cflags': [ '-Wall', '-Wextra', '-Wno-unused-parameter', ],
-        'cflags_cc': [ '-fno-rtti', '-fno-exceptions', '-std=gnu++0x' ],
+        'cflags_cc': [ '-fno-rtti', '-fno-exceptions', '-std=gnu++1y' ],
         'ldflags': [ '-rdynamic' ],
         'target_conditions': [
           # The 1990s toolchain on SmartOS can't handle thin archives.
           ['_type=="static_library" and OS=="solaris"', {
             'standalone_static_library': 1,
+          }],
+          ['OS=="openbsd"', {
+            'cflags': [ '-I/usr/local/include' ],
+            'ldflags': [ '-Wl,-z,wxneeded' ],
           }],
         ],
         'conditions': [
@@ -301,12 +404,12 @@
 	    'ldflags': [ '-m64' ],
 	   }],
           [ 'target_arch=="s390"', {
-            'cflags': [ '-m31' ],
-            'ldflags': [ '-m31' ],
+            'cflags': [ '-m31', '-march=z196' ],
+            'ldflags': [ '-m31', '-march=z196' ],
           }],
           [ 'target_arch=="s390x"', {
-            'cflags': [ '-m64' ],
-            'ldflags': [ '-m64' ],
+            'cflags': [ '-m64', '-march=z196' ],
+            'ldflags': [ '-m64', '-march=z196' ],
           }],
           [ 'OS=="solaris"', {
             'cflags': [ '-pthreads' ],
@@ -315,6 +418,7 @@
             'ldflags!': [ '-pthread' ],
           }],
           [ 'OS=="aix"', {
+            'variables': {'real_os_name': '<!(uname -s)',},
             'conditions': [
               [ 'target_arch=="ppc"', {
                 'ldflags': [ '-Wl,-bmaxdata:0x60000000/dsa' ],
@@ -322,6 +426,12 @@
               [ 'target_arch=="ppc64"', {
                 'cflags': [ '-maix64' ],
                 'ldflags': [ '-maix64' ],
+              }],
+              ['"<(real_os_name)"=="OS400"', {
+                'ldflags': [
+                  '-Wl,-blibpath:/QOpenSys/pkgs/lib:/QOpenSys/usr/lib',
+                  '-Wl,-brtl',
+                ],
               }],
             ],
             'ldflags': [ '-Wl,-bbigtoc' ],
@@ -350,7 +460,6 @@
           'GCC_ENABLE_CPP_EXCEPTIONS': 'NO',        # -fno-exceptions
           'GCC_ENABLE_CPP_RTTI': 'NO',              # -fno-rtti
           'GCC_ENABLE_PASCAL_STRINGS': 'NO',        # No -mpascal-strings
-          'GCC_THREADSAFE_STATICS': 'NO',           # -fno-threadsafe-statics
           'PREBINDING': 'NO',                       # No -Wl,-prebind
           'MACOSX_DEPLOYMENT_TARGET': '10.7',       # -mmacosx-version-min=10.7
           'USE_HEADERMAP': 'NO',
@@ -384,7 +493,7 @@
           ['clang==1', {
             'xcode_settings': {
               'GCC_VERSION': 'com.apple.compilers.llvm.clang.1_0',
-              'CLANG_CXX_LANGUAGE_STANDARD': 'gnu++0x',  # -std=gnu++0x
+              'CLANG_CXX_LANGUAGE_STANDARD': 'gnu++1y',  # -std=gnu++1y
               'CLANG_CXX_LIBRARY': 'libc++',
             },
           }],

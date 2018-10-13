@@ -1,3 +1,4 @@
+/* eslint-disable camelcase */
 var fs = require('fs')
 var path = require('path')
 
@@ -53,12 +54,16 @@ var example_shrinkwrap_json = {
 
 var installed_prod_pkg_json = {
   _id: 'installed-prod@1.0.0',
+  _integrity: 'sha1-deadbeef',
+  _resolved: 'foo',
   name: 'installed-prod',
   version: '1.0.0'
 }
 
 var installed_dev_pkg_json = {
   _id: 'installed-dev@1.0.0',
+  _integrity: 'sha1-deadbeef',
+  _resolved: 'foo',
   name: 'installed-dev',
   version: '1.0.0'
 }

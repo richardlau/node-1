@@ -41,13 +41,13 @@ function RunAsmJsTest(asmfunc, expect) {
   expect(asm_module);
 }
 
-const fround = Math.fround;
-const Math_ceil = Math.ceil;
-const Math_floor = Math.floor;
-const Math_sqrt = Math.sqrt;
-const Math_abs = Math.abs;
-const Math_min = Math.min;
-const Math_max = Math.max;
+var fround = Math.fround;
+var Math_ceil = Math.ceil;
+var Math_floor = Math.floor;
+var Math_sqrt = Math.sqrt;
+var Math_abs = Math.abs;
+var Math_min = Math.min;
+var Math_max = Math.max;
 
 function f32_add(a, b) {
   a = fround(a);
@@ -159,6 +159,11 @@ function f32_gteq(a, b) {
   return 0;
 }
 
+function f32_neg(a) {
+  a = fround(a);
+  return fround(-a);
+}
+
 
 var inputs = [
   0, 1, 2, 3, 4,
@@ -195,22 +200,8 @@ var inputs = [
 ];
 
 var funcs = [
-  f32_add,
-  f32_sub,
-  f32_mul,
-  f32_div,
-  f32_ceil,
-  f32_floor,
-// TODO(bradnelson) f32_sqrt,
-// TODO(bradnelson) f32_abs,
-// TODO(bradnelson) f32_min is wrong for -0
-// TODO(bradnelson) f32_max is wrong for -0
-  f32_eq,
-  f32_ne,
-  f32_lt,
-  f32_lteq,
-  f32_gt,
-  f32_gteq,
+  f32_add, f32_sub, f32_mul, f32_div, f32_ceil, f32_floor, f32_sqrt, f32_abs,
+  f32_min, f32_max, f32_eq, f32_ne, f32_lt, f32_lteq, f32_gt, f32_gteq, f32_neg
 ];
 
 (function () {

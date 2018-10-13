@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 #include "src/base/macros.h"
+#include "src/globals.h"
 
 namespace v8 {
 namespace internal {
@@ -25,22 +26,23 @@ enum PerThreadAssertType {
   LAST_PER_THREAD_ASSERT_TYPE
 };
 
-
 enum PerIsolateAssertType {
   JAVASCRIPT_EXECUTION_ASSERT,
   JAVASCRIPT_EXECUTION_THROWS,
   DEOPTIMIZATION_ASSERT,
-  COMPILATION_ASSERT
+  COMPILATION_ASSERT,
+  NO_EXCEPTION_ASSERT
 };
-
 
 template <PerThreadAssertType kType, bool kAllow>
 class PerThreadAssertScope {
  public:
-  PerThreadAssertScope();
-  ~PerThreadAssertScope();
+  V8_EXPORT_PRIVATE PerThreadAssertScope();
+  V8_EXPORT_PRIVATE ~PerThreadAssertScope();
 
-  static bool IsAllowed();
+  V8_EXPORT_PRIVATE static bool IsAllowed();
+
+  void Release();
 
  private:
   PerThreadAssertData* data_;
@@ -76,6 +78,7 @@ class PerThreadAssertScopeDebugOnly : public
 class PerThreadAssertScopeDebugOnly {
  public:
   PerThreadAssertScopeDebugOnly() { }
+  void Release() {}
 #endif
 };
 
@@ -136,6 +139,12 @@ typedef PerThreadAssertScopeDebugOnly<CODE_DEPENDENCY_CHANGE_ASSERT, false>
 typedef PerThreadAssertScopeDebugOnly<CODE_DEPENDENCY_CHANGE_ASSERT, true>
     AllowCodeDependencyChange;
 
+class DisallowHeapAccess {
+  DisallowHeapAllocation no_heap_allocation_;
+  DisallowHandleAllocation no_handle_allocation_;
+  DisallowHandleDereference no_handle_dereference_;
+  DisallowCodeDependencyChange no_dependency_change_;
+};
 
 // Per-isolate assert scopes.
 
@@ -146,6 +155,14 @@ typedef PerIsolateAssertScope<JAVASCRIPT_EXECUTION_ASSERT, false>
 // Scope to introduce an exception to DisallowJavascriptExecution.
 typedef PerIsolateAssertScope<JAVASCRIPT_EXECUTION_ASSERT, true>
     AllowJavascriptExecution;
+
+// Scope to document where we do not expect javascript execution (debug only)
+typedef PerIsolateAssertScopeDebugOnly<JAVASCRIPT_EXECUTION_ASSERT, false>
+    DisallowJavascriptExecutionDebugOnly;
+
+// Scope to introduce an exception to DisallowJavascriptExecutionDebugOnly.
+typedef PerIsolateAssertScopeDebugOnly<JAVASCRIPT_EXECUTION_ASSERT, true>
+    AllowJavascriptExecutionDebugOnly;
 
 // Scope in which javascript execution leads to exception being thrown.
 typedef PerIsolateAssertScope<JAVASCRIPT_EXECUTION_THROWS, false>
@@ -170,6 +187,14 @@ typedef PerIsolateAssertScopeDebugOnly<COMPILATION_ASSERT, false>
 // Scope to introduce an exception to DisallowDeoptimization.
 typedef PerIsolateAssertScopeDebugOnly<COMPILATION_ASSERT, true>
     AllowCompilation;
+
+// Scope to document where we do not expect exceptions.
+typedef PerIsolateAssertScopeDebugOnly<NO_EXCEPTION_ASSERT, false>
+    DisallowExceptions;
+
+// Scope to introduce an exception to DisallowExceptions.
+typedef PerIsolateAssertScopeDebugOnly<NO_EXCEPTION_ASSERT, true>
+    AllowExceptions;
 }  // namespace internal
 }  // namespace v8
 

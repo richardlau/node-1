@@ -15,16 +15,17 @@ void UnwindingInfoWriter::BeginInstructionBlock(int pc_offset,
 
   block_will_exit_ = false;
 
-  DCHECK_LT(block->rpo_number().ToInt(), block_initial_states_.size());
+  DCHECK_LT(block->rpo_number().ToInt(),
+            static_cast<int>(block_initial_states_.size()));
   const BlockInitialState* initial_state =
       block_initial_states_[block->rpo_number().ToInt()];
   if (initial_state) {
-    if (!initial_state->register_.is(eh_frame_writer_.base_register()) &&
+    if (initial_state->register_ != eh_frame_writer_.base_register() &&
         initial_state->offset_ != eh_frame_writer_.base_offset()) {
       eh_frame_writer_.AdvanceLocation(pc_offset);
       eh_frame_writer_.SetBaseAddressRegisterAndOffset(initial_state->register_,
                                                        initial_state->offset_);
-    } else if (!initial_state->register_.is(eh_frame_writer_.base_register())) {
+    } else if (initial_state->register_ != eh_frame_writer_.base_register()) {
       eh_frame_writer_.AdvanceLocation(pc_offset);
       eh_frame_writer_.SetBaseAddressRegister(initial_state->register_);
     } else if (initial_state->offset_ != eh_frame_writer_.base_offset()) {
@@ -47,13 +48,13 @@ void UnwindingInfoWriter::EndInstructionBlock(const InstructionBlock* block) {
 
   for (const RpoNumber& successor : block->successors()) {
     int successor_index = successor.ToInt();
-    DCHECK_LT(successor_index, block_initial_states_.size());
+    DCHECK_LT(successor_index, static_cast<int>(block_initial_states_.size()));
     const BlockInitialState* existing_state =
         block_initial_states_[successor_index];
     // If we already had an entry for this BB, check that the values are the
     // same we are trying to insert.
     if (existing_state) {
-      DCHECK(existing_state->register_.is(eh_frame_writer_.base_register()));
+      DCHECK(existing_state->register_ == eh_frame_writer_.base_register());
       DCHECK_EQ(existing_state->offset_, eh_frame_writer_.base_offset());
       DCHECK_EQ(existing_state->tracking_fp_, tracking_fp_);
     } else {

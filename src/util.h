@@ -1,8 +1,30 @@
+// Copyright Joyent, Inc. and other Node contributors.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 #ifndef SRC_UTIL_H_
 #define SRC_UTIL_H_
 
 #if defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
 
+#include "node_persistent.h"
 #include "v8.h"
 
 #include <assert.h>
@@ -10,8 +32,12 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-#include <type_traits>  // std::remove_reference
+#include <functional>  // std::function
+#include <set>
+#include <string>
+#include <unordered_map>
 
 namespace node {
 
@@ -38,43 +64,32 @@ inline T* Malloc(size_t n);
 template <typename T>
 inline T* Calloc(size_t n);
 
-// Shortcuts for char*.
-inline char* Malloc(size_t n) { return Malloc<char>(n); }
-inline char* Calloc(size_t n) { return Calloc<char>(n); }
-inline char* UncheckedMalloc(size_t n) { return UncheckedMalloc<char>(n); }
-inline char* UncheckedCalloc(size_t n) { return UncheckedCalloc<char>(n); }
+inline char* Malloc(size_t n);
+inline char* Calloc(size_t n);
+inline char* UncheckedMalloc(size_t n);
+inline char* UncheckedCalloc(size_t n);
+
+template <typename T>
+inline T MultiplyWithOverflowCheck(T a, T b);
 
 // Used by the allocation functions when allocation fails.
 // Thin wrapper around v8::Isolate::LowMemoryNotification() that checks
 // whether V8 is initialized.
 void LowMemoryNotification();
 
-#ifdef __GNUC__
-#define NO_RETURN __attribute__((noreturn))
-#else
-#define NO_RETURN
-#endif
-
 // The slightly odd function signature for Assert() is to ease
-// instruction cache pressure in calls from ASSERT and CHECK.
-NO_RETURN void Abort();
-NO_RETURN void Assert(const char* const (*args)[4]);
+// instruction cache pressure in calls from CHECK.
+[[noreturn]] void Abort();
+[[noreturn]] void Assert(const char* const (*args)[4]);
 void DumpBacktrace(FILE* fp);
 
-template <typename T> using remove_reference = std::remove_reference<T>;
-
-#define FIXED_ONE_BYTE_STRING(isolate, string)                                \
-  (node::OneByteString((isolate), (string), sizeof(string) - 1))
-
 #define DISALLOW_COPY_AND_ASSIGN(TypeName)                                    \
-  void operator=(const TypeName&) = delete;                                   \
-  void operator=(TypeName&&) = delete;                                        \
   TypeName(const TypeName&) = delete;                                         \
-  TypeName(TypeName&&) = delete
+  TypeName& operator=(const TypeName&) = delete
 
 // Windows 8+ does not like abort() in Release mode
 #ifdef _WIN32
-#define ABORT_NO_BACKTRACE() raise(SIGABRT)
+#define ABORT_NO_BACKTRACE() _exit(134)
 #else
 #define ABORT_NO_BACKTRACE() abort()
 #endif
@@ -103,43 +118,17 @@ template <typename T> using remove_reference = std::remove_reference<T>;
     }                                                                         \
   } while (0)
 
-// FIXME(bnoordhuis) cctests don't link in node::Abort() and node::Assert().
-#ifdef GTEST_DONT_DEFINE_ASSERT_EQ
-#undef ABORT
-#undef CHECK
-#define ABORT ABORT_NO_BACKTRACE
-#define CHECK assert
-#endif
-
-#ifdef NDEBUG
-#define ASSERT(expr)
-#else
-#define ASSERT(expr) CHECK(expr)
-#endif
-
-#define ASSERT_EQ(a, b) ASSERT((a) == (b))
-#define ASSERT_GE(a, b) ASSERT((a) >= (b))
-#define ASSERT_GT(a, b) ASSERT((a) > (b))
-#define ASSERT_LE(a, b) ASSERT((a) <= (b))
-#define ASSERT_LT(a, b) ASSERT((a) < (b))
-#define ASSERT_NE(a, b) ASSERT((a) != (b))
-
 #define CHECK_EQ(a, b) CHECK((a) == (b))
 #define CHECK_GE(a, b) CHECK((a) >= (b))
 #define CHECK_GT(a, b) CHECK((a) > (b))
 #define CHECK_LE(a, b) CHECK((a) <= (b))
 #define CHECK_LT(a, b) CHECK((a) < (b))
 #define CHECK_NE(a, b) CHECK((a) != (b))
+#define CHECK_NULL(val) CHECK((val) == nullptr)
+#define CHECK_NOT_NULL(val) CHECK((val) != nullptr)
+#define CHECK_IMPLIES(a, b) CHECK(!(a) || (b))
 
 #define UNREACHABLE() ABORT()
-
-#define ASSIGN_OR_RETURN_UNWRAP(ptr, obj, ...)                                \
-  do {                                                                        \
-    *ptr =                                                                    \
-        Unwrap<typename node::remove_reference<decltype(**ptr)>::type>(obj);  \
-    if (*ptr == nullptr)                                                      \
-      return __VA_ARGS__;                                                     \
-  } while (0)
 
 // TAILQ-style intrusive list node.
 template <typename T>
@@ -159,6 +148,7 @@ class ListNode {
 
  private:
   template <typename U, ListNode<U> (U::*M)> friend class ListHead;
+  friend int GenDebugSymbols();
   ListNode* prev_;
   ListNode* next_;
   DISALLOW_COPY_AND_ASSIGN(ListNode);
@@ -181,7 +171,6 @@ class ListHead {
 
   inline ListHead() = default;
   inline ~ListHead();
-  inline void MoveBack(ListHead* that);
   inline void PushBack(T* element);
   inline void PushFront(T* element);
   inline bool IsEmpty() const;
@@ -190,6 +179,7 @@ class ListHead {
   inline Iterator end() const;
 
  private:
+  friend int GenDebugSymbols();
   ListNode<T> head_;
   DISALLOW_COPY_AND_ASSIGN(ListHead);
 };
@@ -217,21 +207,21 @@ inline ContainerOfHelper<Inner, Outer> ContainerOf(Inner Outer::*field,
 template <class TypeName>
 inline v8::Local<TypeName> PersistentToLocal(
     v8::Isolate* isolate,
-    const v8::Persistent<TypeName>& persistent);
+    const Persistent<TypeName>& persistent);
 
-// Unchecked conversion from a non-weak Persistent<T> to Local<TLocal<T>,
+// Unchecked conversion from a non-weak Persistent<T> to Local<T>,
 // use with care!
 //
 // Do not call persistent.Reset() while the returned Local<T> is still in
 // scope, it will destroy the reference to the object.
 template <class TypeName>
 inline v8::Local<TypeName> StrongPersistentToLocal(
-    const v8::Persistent<TypeName>& persistent);
+    const Persistent<TypeName>& persistent);
 
 template <class TypeName>
 inline v8::Local<TypeName> WeakPersistentToLocal(
     v8::Isolate* isolate,
-    const v8::Persistent<TypeName>& persistent);
+    const Persistent<TypeName>& persistent);
 
 // Convenience wrapper around v8::String::NewFromOneByte().
 inline v8::Local<v8::String> OneByteString(v8::Isolate* isolate,
@@ -247,12 +237,14 @@ inline v8::Local<v8::String> OneByteString(v8::Isolate* isolate,
                                            const unsigned char* data,
                                            int length = -1);
 
-inline void Wrap(v8::Local<v8::Object> object, void* pointer);
+// Used to be a macro, hence the uppercase name.
+template <int N>
+inline v8::Local<v8::String> FIXED_ONE_BYTE_STRING(
+    v8::Isolate* isolate,
+    const char(&data)[N]) {
+  return OneByteString(isolate, data, N - 1);
+}
 
-inline void ClearWrap(v8::Local<v8::Object> object);
-
-template <typename TypeName>
-inline TypeName* Unwrap(v8::Local<v8::Object> object);
 
 // Swaps bytes in place. nbytes is the number of bytes to swap and must be a
 // multiple of the word size (checked by function).
@@ -262,6 +254,7 @@ inline void SwapBytes64(char* data, size_t nbytes);
 
 // tolower() is locale-sensitive.  Use ToLower() instead.
 inline char ToLower(char c);
+inline std::string ToLower(const std::string& in);
 
 // strcasecmp() is locale-sensitive.  Use StringEqualNoCase() instead.
 inline bool StringEqualNoCase(const char* a, const char* b);
@@ -305,29 +298,40 @@ class MaybeStackBuffer {
     return length_;
   }
 
-  // Call to make sure enough space for `storage` entries is available.
-  // There can only be 1 call to AllocateSufficientStorage or Invalidate
-  // per instance.
+  // Current maximum capacity of the buffer with which SetLength() can be used
+  // without first calling AllocateSufficientStorage().
+  size_t capacity() const {
+    return IsAllocated() ? capacity_ :
+                           IsInvalidated() ? 0 : kStackStorageSize;
+  }
+
+  // Make sure enough space for `storage` entries is available.
+  // This method can be called multiple times throughout the lifetime of the
+  // buffer, but once this has been called Invalidate() cannot be used.
+  // Content of the buffer in the range [0, length()) is preserved.
   void AllocateSufficientStorage(size_t storage) {
-    if (storage <= kStackStorageSize) {
-      buf_ = buf_st_;
-    } else {
-      buf_ = Malloc<T>(storage);
+    CHECK(!IsInvalidated());
+    if (storage > capacity()) {
+      bool was_allocated = IsAllocated();
+      T* allocated_ptr = was_allocated ? buf_ : nullptr;
+      buf_ = Realloc(allocated_ptr, storage);
+      capacity_ = storage;
+      if (!was_allocated && length_ > 0)
+        memcpy(buf_, buf_st_, length_ * sizeof(buf_[0]));
     }
 
-    // Remember how much was allocated to check against that in SetLength().
     length_ = storage;
   }
 
   void SetLength(size_t length) {
-    // length_ stores how much memory was allocated.
-    CHECK_LE(length, length_);
+    // capacity() returns how much memory is actually available.
+    CHECK_LE(length, capacity());
     length_ = length;
   }
 
   void SetLengthAndZeroTerminate(size_t length) {
-    // length_ stores how much memory was allocated.
-    CHECK_LE(length + 1, length_);
+    // capacity() returns how much memory is actually available.
+    CHECK_LE(length + 1, capacity());
     SetLength(length);
 
     // T() is 0 for integer types, nullptr for pointers, etc.
@@ -335,15 +339,35 @@ class MaybeStackBuffer {
   }
 
   // Make derefencing this object return nullptr.
-  // Calling this is mutually exclusive with calling
-  // AllocateSufficientStorage.
+  // This method can be called multiple times throughout the lifetime of the
+  // buffer, but once this has been called AllocateSufficientStorage() cannot
+  // be used.
   void Invalidate() {
-    CHECK_EQ(buf_, buf_st_);
+    CHECK(!IsAllocated());
     length_ = 0;
     buf_ = nullptr;
   }
 
-  MaybeStackBuffer() : length_(0), buf_(buf_st_) {
+  // If the buffer is stored in the heap rather than on the stack.
+  bool IsAllocated() const {
+    return !IsInvalidated() && buf_ != buf_st_;
+  }
+
+  // If Invalidate() has been called.
+  bool IsInvalidated() const {
+    return buf_ == nullptr;
+  }
+
+  // Release ownership of the malloc'd buffer.
+  // Note: This does not free the buffer.
+  void Release() {
+    CHECK(IsAllocated());
+    buf_ = buf_st_;
+    length_ = 0;
+    capacity_ = 0;
+  }
+
+  MaybeStackBuffer() : length_(0), capacity_(0), buf_(buf_st_) {
     // Default to a zero-length, null-terminated buffer.
     buf_[0] = T();
   }
@@ -353,12 +377,14 @@ class MaybeStackBuffer {
   }
 
   ~MaybeStackBuffer() {
-    if (buf_ != buf_st_)
+    if (IsAllocated())
       free(buf_);
   }
 
  private:
   size_t length_;
+  // capacity of the malloc'ed buf_
+  size_t capacity_;
   T* buf_;
   T buf_st_[kStackStorageSize];
 };
@@ -377,6 +403,89 @@ class BufferValue : public MaybeStackBuffer<char> {
  public:
   explicit BufferValue(v8::Isolate* isolate, v8::Local<v8::Value> value);
 };
+
+#define SPREAD_BUFFER_ARG(val, name)                                          \
+  CHECK((val)->IsArrayBufferView());                                          \
+  v8::Local<v8::ArrayBufferView> name = (val).As<v8::ArrayBufferView>();      \
+  v8::ArrayBuffer::Contents name##_c = name->Buffer()->GetContents();         \
+  const size_t name##_offset = name->ByteOffset();                            \
+  const size_t name##_length = name->ByteLength();                            \
+  char* const name##_data =                                                   \
+      static_cast<char*>(name##_c.Data()) + name##_offset;                    \
+  if (name##_length > 0)                                                      \
+    CHECK_NE(name##_data, nullptr);
+
+// Use this when a variable or parameter is unused in order to explicitly
+// silence a compiler warning about that.
+template <typename T> inline void USE(T&&) {}
+
+// Run a function when exiting the current scope.
+struct OnScopeLeave {
+  std::function<void()> fn_;
+
+  explicit OnScopeLeave(std::function<void()> fn) : fn_(fn) {}
+  ~OnScopeLeave() { fn_(); }
+};
+
+// Simple RAII wrapper for contiguous data that uses malloc()/free().
+template <typename T>
+struct MallocedBuffer {
+  T* data;
+  size_t size;
+
+  T* release() {
+    T* ret = data;
+    data = nullptr;
+    return ret;
+  }
+
+  inline bool is_empty() const { return data == nullptr; }
+
+  MallocedBuffer() : data(nullptr) {}
+  explicit MallocedBuffer(size_t size) : data(Malloc<T>(size)), size(size) {}
+  MallocedBuffer(T* data, size_t size) : data(data), size(size) {}
+  MallocedBuffer(MallocedBuffer&& other) : data(other.data), size(other.size) {
+    other.data = nullptr;
+  }
+  MallocedBuffer& operator=(MallocedBuffer&& other) {
+    this->~MallocedBuffer();
+    return *new(this) MallocedBuffer(std::move(other));
+  }
+  ~MallocedBuffer() {
+    free(data);
+  }
+  MallocedBuffer(const MallocedBuffer&) = delete;
+  MallocedBuffer& operator=(const MallocedBuffer&) = delete;
+};
+
+// Test whether some value can be called with ().
+template <typename T, typename = void>
+struct is_callable : std::is_function<T> { };
+
+template <typename T>
+struct is_callable<T, typename std::enable_if<
+    std::is_same<decltype(void(&T::operator())), void>::value
+    >::type> : std::true_type { };
+
+template <typename T, void (*function)(T*)>
+struct FunctionDeleter {
+  void operator()(T* pointer) const { function(pointer); }
+  typedef std::unique_ptr<T, FunctionDeleter> Pointer;
+};
+
+template <typename T, void (*function)(T*)>
+using DeleteFnPtr = typename FunctionDeleter<T, function>::Pointer;
+
+std::set<std::string> ParseCommaSeparatedSet(const std::string& in);
+
+inline v8::MaybeLocal<v8::Value> ToV8Value(v8::Local<v8::Context> context,
+                                           const std::string& str);
+template <typename T>
+inline v8::MaybeLocal<v8::Value> ToV8Value(v8::Local<v8::Context> context,
+                                           const std::vector<T>& vec);
+template <typename T, typename U>
+inline v8::MaybeLocal<v8::Value> ToV8Value(v8::Local<v8::Context> context,
+                                           const std::unordered_map<T, U>& map);
 
 }  // namespace node
 

@@ -1,4 +1,7 @@
-# Node.js v0.10 ChangeLog
+# Node.js 0.10 ChangeLog
+
+<!--lint disable prohibited-strings-->
+<!--lint disable maximum-line-length-->
 
 <table>
 <tr>
@@ -62,6 +65,10 @@
 </table>
 
 * Other Versions
+  * [10.x](CHANGELOG_V10.md)
+  * [9.x](CHANGELOG_V9.md)
+  * [8.x](CHANGELOG_V8.md)
+  * [7.x](CHANGELOG_V7.md)
   * [6.x](CHANGELOG_V6.md)
   * [5.x](CHANGELOG_V5.md)
   * [4.x](CHANGELOG_V4.md)
@@ -69,7 +76,7 @@
   * [io.js](CHANGELOG_IOJS.md)
   * [Archive](CHANGELOG_ARCHIVE.md)
 
-**Note:** Node.js v0.10 is covered by the 
+*Note*: Node.js v0.10 is covered by the
 [Node.js Long Term Support Plan](https://github.com/nodejs/LTS) and
 will be maintained until October 2016.
 
@@ -358,11 +365,11 @@ https://github.com/nodejs/node/commit/8d045a30e95602b443eb259a5021d33feb4df079
 * child_process: properly support optional args (cjihrig)
 * crypto: Disable autonegotiation for SSLv2/3 by default (Fedor Indutny,
   Timothy J Fontaine, Alexis Campailla)
- 
+
   This is a behavior change, by default we will not allow the negotiation to
   SSLv2 or SSLv3. If you want this behavior, run Node.js with either
   `--enable-ssl2` or `--enable-ssl3` respectively.
- 
+
   This does not change the behavior for users specifically requesting
   `SSLv2_method` or `SSLv3_method`. While this behavior is not advised, it is
   assumed you know what you're doing since you're specifically asking to use

@@ -1,3 +1,5 @@
+// © 2016 and later: Unicode, Inc. and others.
+// License & terms of use: http://www.unicode.org/copyright.html
 /*
 ******************************************************************************
 * Copyright (C) 2014-2016, International Business Machines
@@ -21,8 +23,8 @@
 #include "unicode/fmtable.h"
 #include "unicode/fieldpos.h"
 #include "standardplural.h"
-#include "visibledigits.h"
 #include "uassert.h"
+#include "number_decimalquantity.h"
 
 U_NAMESPACE_BEGIN
 
@@ -147,15 +149,15 @@ StandardPlural::Form QuantityFormatter::selectPlural(
         return StandardPlural::OTHER;
     }
     UnicodeString pluralKeyword;
-    VisibleDigitsWithExponent digits;
     const DecimalFormat *decFmt = dynamic_cast<const DecimalFormat *>(&fmt);
     if (decFmt != NULL) {
-        decFmt->initVisibleDigitsWithExponent(number, digits, status);
+        number::impl::DecimalQuantity dq;
+        decFmt->formatToDecimalQuantity(number, dq, status);
         if (U_FAILURE(status)) {
             return StandardPlural::OTHER;
         }
-        pluralKeyword = rules.select(digits);
-        decFmt->format(digits, formattedNumber, pos, status);
+        pluralKeyword = rules.select(dq);
+        decFmt->format(number, formattedNumber, pos, status);
     } else {
         if (number.getType() == Formattable::kDouble) {
             pluralKeyword = rules.select(number.getDouble());

@@ -205,21 +205,25 @@ function f64_tan(a) {
   return +Math_tan(+a);
 }
 
-function f64_exp(a, b) {
+function f64_exp(a) {
   a = +a;
-  b = +b;
-  return +Math_exp(+a, +b);
+  return +Math_exp(+a);
 }
 
-function f64_log(a, b) {
+function f64_log(a) {
   a = +a;
-  b = +b;
-  return +Math_log(+a, +b);
+  return +Math_log(+a);
 }
 
-function f64_atan2(a) {
+function f64_atan2(a, b) {
   a = +a;
-  return +Math_atan2(+a);
+  b = +b;
+  return +Math_atan2(+a, +b);
+}
+
+function f64_neg(a) {
+  a = +a;
+  return +(-a);
 }
 
 
@@ -258,31 +262,10 @@ var inputs = [
 ];
 
 var funcs = [
-  f64_add,
-  f64_sub,
-  f64_mul,
-  f64_div,
-  f64_eq,
-  f64_ne,
-  f64_lt,
-  f64_lteq,
-  f64_gt,
-  f64_gteq,
-  f64_ceil,
-  f64_floor,
-// TODO(bradnelson) f64_sqrt,
-  f64_abs,
-// TODO(bradnelson) f64_min is wrong for -0
-// TODO(bradnelson) f64_max is wrong for -0
-// TODO(bradnelson) f64_acos,
-// TODO(bradnelson) f64_asin,
-// TODO(bradnelson) f64_atan,
-// TODO(bradnelson) f64_cos,
-// TODO(bradnelson) f64_sin,
-// TODO(bradnelson) f64_tan,
-// TODO(bradnelson) f64_exp,
-// TODO(bradnelson) f64_log,
-// TODO(bradnelson) f64_atan2,
+  f64_add,  f64_sub, f64_mul,  f64_div,  f64_eq,    f64_ne,   f64_lt,
+  f64_lteq, f64_gt,  f64_gteq, f64_ceil, f64_floor, f64_sqrt, f64_abs,
+  f64_neg,  f64_min, f64_max,  f64_acos, f64_asin,  f64_atan, f64_cos,
+  f64_sin,  f64_tan, f64_exp,  f64_log,  f64_atan2,
 ];
 
 (function () {

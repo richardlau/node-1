@@ -6,21 +6,32 @@
 
 #include "src/code-factory.h"
 #include "src/compiler/access-builder.h"
+#include "src/compiler/compiler-source-position-table.h"
 #include "src/compiler/js-graph.h"
 #include "src/compiler/linkage.h"
 #include "src/compiler/node-matchers.h"
+#include "src/compiler/node-origin-table.h"
 #include "src/compiler/node-properties.h"
 #include "src/compiler/node.h"
 #include "src/compiler/schedule.h"
+#include "src/heap/factory-inl.h"
 
 namespace v8 {
 namespace internal {
 namespace compiler {
 
-EffectControlLinearizer::EffectControlLinearizer(JSGraph* js_graph,
-                                                 Schedule* schedule,
-                                                 Zone* temp_zone)
-    : js_graph_(js_graph), schedule_(schedule), temp_zone_(temp_zone) {}
+EffectControlLinearizer::EffectControlLinearizer(
+    JSGraph* js_graph, Schedule* schedule, Zone* temp_zone,
+    SourcePositionTable* source_positions, NodeOriginTable* node_origins,
+    MaskArrayIndexEnable mask_array_index)
+    : js_graph_(js_graph),
+      schedule_(schedule),
+      temp_zone_(temp_zone),
+      mask_array_index_(mask_array_index),
+      source_positions_(source_positions),
+      node_origins_(node_origins),
+      graph_assembler_(js_graph, nullptr, nullptr, temp_zone),
+      frame_state_zapper_(nullptr) {}
 
 Graph* EffectControlLinearizer::graph() const { return js_graph_->graph(); }
 CommonOperatorBuilder* EffectControlLinearizer::common() const {
@@ -69,19 +80,32 @@ struct PendingEffectPhi {
       : effect_phi(effect_phi), block(block) {}
 };
 
+void ConnectUnreachableToEnd(Node* effect, Node* control, JSGraph* jsgraph) {
+  Graph* graph = jsgraph->graph();
+  CommonOperatorBuilder* common = jsgraph->common();
+  if (effect->opcode() == IrOpcode::kDead) return;
+  if (effect->opcode() != IrOpcode::kUnreachable) {
+    effect = graph->NewNode(common->Unreachable(), effect, control);
+  }
+  Node* throw_node = graph->NewNode(common->Throw(), effect, control);
+  NodeProperties::MergeControlToEnd(graph, common, throw_node);
+}
+
 void UpdateEffectPhi(Node* node, BasicBlock* block,
-                     BlockEffectControlMap* block_effects) {
+                     BlockEffectControlMap* block_effects, JSGraph* jsgraph) {
   // Update all inputs to an effect phi with the effects from the given
   // block->effect map.
   DCHECK_EQ(IrOpcode::kEffectPhi, node->opcode());
-  DCHECK_EQ(node->op()->EffectInputCount(), block->PredecessorCount());
+  DCHECK_EQ(static_cast<size_t>(node->op()->EffectInputCount()),
+            block->PredecessorCount());
   for (int i = 0; i < node->op()->EffectInputCount(); i++) {
     Node* input = node->InputAt(i);
     BasicBlock* predecessor = block->PredecessorAt(static_cast<size_t>(i));
     const BlockEffectControlData& block_effect =
         block_effects->For(predecessor, block);
-    if (input != block_effect.current_effect) {
-      node->ReplaceInput(i, block_effect.current_effect);
+    Node* effect = block_effect.current_effect;
+    if (input != effect) {
+      node->ReplaceInput(i, effect);
     }
   }
 }
@@ -96,8 +120,10 @@ void UpdateBlockControl(BasicBlock* block,
 
   // Update all inputs to the given control node with the correct control.
   DCHECK(control->opcode() == IrOpcode::kMerge ||
-         control->op()->ControlInputCount() == block->PredecessorCount());
-  if (control->op()->ControlInputCount() != block->PredecessorCount()) {
+         static_cast<size_t>(control->op()->ControlInputCount()) ==
+             block->PredecessorCount());
+  if (static_cast<size_t>(control->op()->ControlInputCount()) !=
+      block->PredecessorCount()) {
     return;  // We already re-wired the control inputs of this node.
   }
   for (int i = 0; i < control->op()->ControlInputCount(); i++) {
@@ -121,9 +147,10 @@ bool HasIncomingBackEdges(BasicBlock* block) {
   return false;
 }
 
-void RemoveRegionNode(Node* node) {
+void RemoveRenameNode(Node* node) {
   DCHECK(IrOpcode::kFinishRegion == node->opcode() ||
-         IrOpcode::kBeginRegion == node->opcode());
+         IrOpcode::kBeginRegion == node->opcode() ||
+         IrOpcode::kTypeGuard == node->opcode());
   // Update the value/context uses to the value input of the finish node and
   // the effect uses to the effect input.
   for (Edge edge : node->use_edges()) {
@@ -139,9 +166,11 @@ void RemoveRegionNode(Node* node) {
   node->Kill();
 }
 
-void TryCloneBranch(Node* node, BasicBlock* block, Graph* graph,
-                    CommonOperatorBuilder* common,
-                    BlockEffectControlMap* block_effects) {
+void TryCloneBranch(Node* node, BasicBlock* block, Zone* temp_zone,
+                    Graph* graph, CommonOperatorBuilder* common,
+                    BlockEffectControlMap* block_effects,
+                    SourcePositionTable* source_positions,
+                    NodeOriginTable* node_origins) {
   DCHECK_EQ(IrOpcode::kBranch, node->opcode());
 
   // This optimization is a special case of (super)block cloning. It takes an
@@ -193,6 +222,9 @@ void TryCloneBranch(Node* node, BasicBlock* block, Graph* graph,
   //       ^                   ^
   //       |                   |
 
+  SourcePositionTable::Scope scope(source_positions,
+                                   source_positions->GetSourcePosition(node));
+  NodeOriginTable::Scope origin_scope(node_origins, "clone branch", node);
   Node* branch = node;
   Node* cond = NodeProperties::GetValueInput(branch, 0);
   if (!cond->OwnedBy(branch) || cond->opcode() != IrOpcode::kPhi) return;
@@ -204,7 +236,7 @@ void TryCloneBranch(Node* node, BasicBlock* block, Graph* graph,
   // Grab the IfTrue/IfFalse projections of the Branch.
   BranchMatcher matcher(branch);
   // Check/collect other Phi/EffectPhi nodes hanging off the Merge.
-  NodeVector phis(graph->zone());
+  NodeVector phis(temp_zone);
   for (Node* const use : merge->uses()) {
     if (use == branch || use == cond) continue;
     // We cannot currently deal with non-Phi/EffectPhi nodes hanging off the
@@ -246,7 +278,7 @@ void TryCloneBranch(Node* node, BasicBlock* block, Graph* graph,
     merge_true->AppendInput(graph->zone(), merge_true_inputs[i]);
     merge_false->AppendInput(graph->zone(), merge_false_inputs[i]);
   }
-  DCHECK_EQ(2, block->SuccessorCount());
+  DCHECK_EQ(2u, block->SuccessorCount());
   NodeProperties::ChangeOp(matcher.IfTrue(), common->Merge(input_count));
   NodeProperties::ChangeOp(matcher.IfFalse(), common->Merge(input_count));
   int const true_index =
@@ -265,7 +297,6 @@ void TryCloneBranch(Node* node, BasicBlock* block, Graph* graph,
     Node* phi_false = graph->NewNode(phi->op(), input_count + 1, inputs);
     if (phi->UseCount() == 0) {
       DCHECK_EQ(phi->opcode(), IrOpcode::kEffectPhi);
-      DCHECK_EQ(input_count, block->SuccessorCount());
     } else {
       for (Edge edge : phi->use_edges()) {
         Node* control = NodeProperties::GetControlInput(edge.from());
@@ -291,6 +322,7 @@ void TryCloneBranch(Node* node, BasicBlock* block, Graph* graph,
   cond->Kill();
   merge->Kill();
 }
+
 }  // namespace
 
 void EffectControlLinearizer::Run() {
@@ -318,40 +350,49 @@ void EffectControlLinearizer::Run() {
     instr++;
 
     // Iterate over the phis and update the effect phis.
-    Node* effect = nullptr;
+    Node* effect_phi = nullptr;
     Node* terminate = nullptr;
     for (; instr < block->NodeCount(); instr++) {
       Node* node = block->NodeAt(instr);
       // Only go through the phis and effect phis.
       if (node->opcode() == IrOpcode::kEffectPhi) {
         // There should be at most one effect phi in a block.
-        DCHECK_NULL(effect);
+        DCHECK_NULL(effect_phi);
         // IfException blocks should not have effect phis.
         DCHECK_NE(IrOpcode::kIfException, control->opcode());
-        effect = node;
-
-        // Make sure we update the inputs to the incoming blocks' effects.
-        if (HasIncomingBackEdges(block)) {
-          // In case of loops, we do not update the effect phi immediately
-          // because the back predecessor has not been handled yet. We just
-          // record the effect phi for later processing.
-          pending_effect_phis.push_back(PendingEffectPhi(node, block));
-        } else {
-          UpdateEffectPhi(node, block, &block_effects);
-        }
+        effect_phi = node;
       } else if (node->opcode() == IrOpcode::kPhi) {
         // Just skip phis.
       } else if (node->opcode() == IrOpcode::kTerminate) {
-        DCHECK(terminate == nullptr);
+        DCHECK_NULL(terminate);
         terminate = node;
       } else {
         break;
       }
     }
 
+    if (effect_phi) {
+      // Make sure we update the inputs to the incoming blocks' effects.
+      if (HasIncomingBackEdges(block)) {
+        // In case of loops, we do not update the effect phi immediately
+        // because the back predecessor has not been handled yet. We just
+        // record the effect phi for later processing.
+        pending_effect_phis.push_back(PendingEffectPhi(effect_phi, block));
+      } else {
+        UpdateEffectPhi(effect_phi, block, &block_effects, jsgraph());
+      }
+    }
+
+    Node* effect = effect_phi;
     if (effect == nullptr) {
       // There was no effect phi.
-      DCHECK(!HasIncomingBackEdges(block));
+
+      // Since a loop should have at least a StackCheck, only loops in
+      // unreachable code can have no effect phi.
+      DCHECK_IMPLIES(
+          HasIncomingBackEdges(block),
+          block_effects.For(block->PredecessorAt(0), block)
+                  .current_effect->opcode() == IrOpcode::kUnreachable);
       if (block == schedule()->start()) {
         // Start block => effect is start.
         DCHECK_EQ(graph()->start(), control);
@@ -364,11 +405,11 @@ void EffectControlLinearizer::Run() {
       } else {
         // If all the predecessors have the same effect, we can use it as our
         // current effect.
-        effect =
-            block_effects.For(block->PredecessorAt(0), block).current_effect;
-        for (size_t i = 1; i < block->PredecessorCount(); ++i) {
-          if (block_effects.For(block->PredecessorAt(i), block)
-                  .current_effect != effect) {
+        for (size_t i = 0; i < block->PredecessorCount(); ++i) {
+          const BlockEffectControlData& data =
+              block_effects.For(block->PredecessorAt(i), block);
+          if (!effect) effect = data.current_effect;
+          if (data.current_effect != effect) {
             effect = nullptr;
             break;
           }
@@ -387,7 +428,7 @@ void EffectControlLinearizer::Run() {
           if (control->opcode() == IrOpcode::kLoop) {
             pending_effect_phis.push_back(PendingEffectPhi(effect, block));
           } else {
-            UpdateEffectPhi(effect, block, &block_effects);
+            UpdateEffectPhi(effect, block, &block_effects, jsgraph());
           }
         } else if (control->opcode() == IrOpcode::kIfException) {
           // The IfException is connected into the effect chain, so we need
@@ -418,6 +459,7 @@ void EffectControlLinearizer::Run() {
         if (block_effects.For(block->PredecessorAt(i), block)
                 .current_frame_state != frame_state) {
           frame_state = nullptr;
+          frame_state_zapper_ = graph()->end();
           break;
         }
       }
@@ -445,8 +487,9 @@ void EffectControlLinearizer::Run() {
 
       case BasicBlock::kBranch:
         ProcessNode(block->control_input(), &frame_state, &effect, &control);
-        TryCloneBranch(block->control_input(), block, graph(), common(),
-                       &block_effects);
+        TryCloneBranch(block->control_input(), block, temp_zone(), graph(),
+                       common(), &block_effects, source_positions_,
+                       node_origins_);
         break;
     }
 
@@ -463,35 +506,23 @@ void EffectControlLinearizer::Run() {
     }
   }
 
+  for (BasicBlock* pending_block_control : pending_block_controls) {
+    UpdateBlockControl(pending_block_control, &block_effects);
+  }
   // Update the incoming edges of the effect phis that could not be processed
   // during the first pass (because they could have incoming back edges).
   for (const PendingEffectPhi& pending_effect_phi : pending_effect_phis) {
     UpdateEffectPhi(pending_effect_phi.effect_phi, pending_effect_phi.block,
-                    &block_effects);
-  }
-  for (BasicBlock* pending_block_control : pending_block_controls) {
-    UpdateBlockControl(pending_block_control, &block_effects);
+                    &block_effects, jsgraph());
   }
 }
-
-namespace {
-
-void TryScheduleCallIfSuccess(Node* node, Node** control) {
-  // Schedule the call's IfSuccess node if there is no exception use.
-  if (!NodeProperties::IsExceptionalCall(node)) {
-    for (Edge edge : node->use_edges()) {
-      if (NodeProperties::IsControlEdge(edge) &&
-          edge.from()->opcode() == IrOpcode::kIfSuccess) {
-        *control = edge.from();
-      }
-    }
-  }
-}
-
-}  // namespace
 
 void EffectControlLinearizer::ProcessNode(Node* node, Node** frame_state,
                                           Node** effect, Node** control) {
+  SourcePositionTable::Scope scope(source_positions_,
+                                   source_positions_->GetSourcePosition(node));
+  NodeOriginTable::Scope origin_scope(node_origins_, "process node", node);
+
   // If the node needs to be wired into the effect/control chain, do this
   // here. Pass current frame state for lowering to eager deoptimization.
   if (TryWireInStateEffect(node, *frame_state, effect, control)) {
@@ -504,6 +535,7 @@ void EffectControlLinearizer::ProcessNode(Node* node, Node** frame_state,
   if (region_observability_ == RegionObservability::kObservable &&
       !node->op()->HasProperty(Operator::kNoWrite)) {
     *frame_state = nullptr;
+    frame_state_zapper_ = node;
   }
 
   // Remove the end markers of 'atomic' allocation region because the
@@ -513,7 +545,7 @@ void EffectControlLinearizer::ProcessNode(Node* node, Node** frame_state,
     region_observability_ = RegionObservability::kObservable;
     // Update the value uses to the value input of the finish node and
     // the effect uses to the effect input.
-    return RemoveRegionNode(node);
+    return RemoveRenameNode(node);
   }
   if (node->opcode() == IrOpcode::kBeginRegion) {
     // Determine the observability for this region and use that for all
@@ -523,7 +555,10 @@ void EffectControlLinearizer::ProcessNode(Node* node, Node** frame_state,
     region_observability_ = RegionObservabilityOf(node->op());
     // Update the value uses to the value input of the finish node and
     // the effect uses to the effect input.
-    return RemoveRegionNode(node);
+    return RemoveRenameNode(node);
+  }
+  if (node->opcode() == IrOpcode::kTypeGuard) {
+    return RemoveRenameNode(node);
   }
 
   // Special treatment for checkpoint nodes.
@@ -535,15 +570,9 @@ void EffectControlLinearizer::ProcessNode(Node* node, Node** frame_state,
     return;
   }
 
-  if (node->opcode() == IrOpcode::kIfSuccess) {
-    // We always schedule IfSuccess with its call, so skip it here.
-    DCHECK_EQ(IrOpcode::kCall, node->InputAt(0)->opcode());
-    // The IfSuccess node should not belong to an exceptional call node
-    // because such IfSuccess nodes should only start a basic block (and
-    // basic block start nodes are not handled in the ProcessNode method).
-    DCHECK(!NodeProperties::IsExceptionalCall(node->InputAt(0)));
-    return;
-  }
+  // The IfSuccess nodes should always start a basic block (and basic block
+  // start nodes are not handled in the ProcessNode method).
+  DCHECK_NE(IrOpcode::kIfSuccess, node->opcode());
 
   // If the node takes an effect, replace with the current one.
   if (node->op()->EffectInputCount() > 0) {
@@ -570,13 +599,16 @@ void EffectControlLinearizer::ProcessNode(Node* node, Node** frame_state,
   for (int i = 0; i < node->op()->ControlInputCount(); i++) {
     NodeProperties::ReplaceControlInput(node, *control, i);
   }
-  // Update the current control and wire IfSuccess right after calls.
+  // Update the current control.
   if (node->op()->ControlOutputCount() > 0) {
     *control = node;
-    if (node->opcode() == IrOpcode::kCall) {
-      // Schedule the call's IfSuccess node (if there is no exception use).
-      TryScheduleCallIfSuccess(node, control);
-    }
+  }
+
+  // Break the effect chain on {Unreachable} and reconnect to the graph end.
+  // Mark the following code for deletion by connecting to the {Dead} node.
+  if (node->opcode() == IrOpcode::kUnreachable) {
+    ConnectUnreachableToEnd(*effect, *control, jsgraph());
+    *effect = *control = jsgraph()->Dead();
   }
 }
 
@@ -584,750 +616,1068 @@ bool EffectControlLinearizer::TryWireInStateEffect(Node* node,
                                                    Node* frame_state,
                                                    Node** effect,
                                                    Node** control) {
-  ValueEffectControl state(nullptr, nullptr, nullptr);
+  gasm()->Reset(*effect, *control);
+  Node* result = nullptr;
   switch (node->opcode()) {
     case IrOpcode::kChangeBitToTagged:
-      state = LowerChangeBitToTagged(node, *effect, *control);
+      result = LowerChangeBitToTagged(node);
       break;
     case IrOpcode::kChangeInt31ToTaggedSigned:
-      state = LowerChangeInt31ToTaggedSigned(node, *effect, *control);
+      result = LowerChangeInt31ToTaggedSigned(node);
       break;
     case IrOpcode::kChangeInt32ToTagged:
-      state = LowerChangeInt32ToTagged(node, *effect, *control);
+      result = LowerChangeInt32ToTagged(node);
       break;
     case IrOpcode::kChangeUint32ToTagged:
-      state = LowerChangeUint32ToTagged(node, *effect, *control);
+      result = LowerChangeUint32ToTagged(node);
       break;
     case IrOpcode::kChangeFloat64ToTagged:
-      state = LowerChangeFloat64ToTagged(node, *effect, *control);
+      result = LowerChangeFloat64ToTagged(node);
+      break;
+    case IrOpcode::kChangeFloat64ToTaggedPointer:
+      result = LowerChangeFloat64ToTaggedPointer(node);
       break;
     case IrOpcode::kChangeTaggedSignedToInt32:
-      state = LowerChangeTaggedSignedToInt32(node, *effect, *control);
+      result = LowerChangeTaggedSignedToInt32(node);
       break;
     case IrOpcode::kChangeTaggedToBit:
-      state = LowerChangeTaggedToBit(node, *effect, *control);
+      result = LowerChangeTaggedToBit(node);
       break;
     case IrOpcode::kChangeTaggedToInt32:
-      state = LowerChangeTaggedToInt32(node, *effect, *control);
+      result = LowerChangeTaggedToInt32(node);
       break;
     case IrOpcode::kChangeTaggedToUint32:
-      state = LowerChangeTaggedToUint32(node, *effect, *control);
+      result = LowerChangeTaggedToUint32(node);
       break;
     case IrOpcode::kChangeTaggedToFloat64:
-      state = LowerChangeTaggedToFloat64(node, *effect, *control);
+      result = LowerChangeTaggedToFloat64(node);
+      break;
+    case IrOpcode::kChangeTaggedToTaggedSigned:
+      result = LowerChangeTaggedToTaggedSigned(node);
+      break;
+    case IrOpcode::kTruncateTaggedToBit:
+      result = LowerTruncateTaggedToBit(node);
+      break;
+    case IrOpcode::kTruncateTaggedPointerToBit:
+      result = LowerTruncateTaggedPointerToBit(node);
       break;
     case IrOpcode::kTruncateTaggedToFloat64:
-      state = LowerTruncateTaggedToFloat64(node, *effect, *control);
+      result = LowerTruncateTaggedToFloat64(node);
       break;
     case IrOpcode::kCheckBounds:
-      state = LowerCheckBounds(node, frame_state, *effect, *control);
+      result = LowerCheckBounds(node, frame_state);
+      break;
+    case IrOpcode::kPoisonIndex:
+      result = LowerPoisonIndex(node);
       break;
     case IrOpcode::kCheckMaps:
-      state = LowerCheckMaps(node, frame_state, *effect, *control);
+      LowerCheckMaps(node, frame_state);
+      break;
+    case IrOpcode::kCompareMaps:
+      result = LowerCompareMaps(node);
       break;
     case IrOpcode::kCheckNumber:
-      state = LowerCheckNumber(node, frame_state, *effect, *control);
+      result = LowerCheckNumber(node, frame_state);
+      break;
+    case IrOpcode::kCheckReceiver:
+      result = LowerCheckReceiver(node, frame_state);
+      break;
+    case IrOpcode::kCheckSymbol:
+      result = LowerCheckSymbol(node, frame_state);
       break;
     case IrOpcode::kCheckString:
-      state = LowerCheckString(node, frame_state, *effect, *control);
+      result = LowerCheckString(node, frame_state);
+      break;
+    case IrOpcode::kCheckInternalizedString:
+      result = LowerCheckInternalizedString(node, frame_state);
       break;
     case IrOpcode::kCheckIf:
-      state = LowerCheckIf(node, frame_state, *effect, *control);
-      break;
-    case IrOpcode::kCheckTaggedPointer:
-      state = LowerCheckTaggedPointer(node, frame_state, *effect, *control);
-      break;
-    case IrOpcode::kCheckTaggedSigned:
-      state = LowerCheckTaggedSigned(node, frame_state, *effect, *control);
+      LowerCheckIf(node, frame_state);
       break;
     case IrOpcode::kCheckedInt32Add:
-      state = LowerCheckedInt32Add(node, frame_state, *effect, *control);
+      result = LowerCheckedInt32Add(node, frame_state);
       break;
     case IrOpcode::kCheckedInt32Sub:
-      state = LowerCheckedInt32Sub(node, frame_state, *effect, *control);
+      result = LowerCheckedInt32Sub(node, frame_state);
       break;
     case IrOpcode::kCheckedInt32Div:
-      state = LowerCheckedInt32Div(node, frame_state, *effect, *control);
+      result = LowerCheckedInt32Div(node, frame_state);
       break;
     case IrOpcode::kCheckedInt32Mod:
-      state = LowerCheckedInt32Mod(node, frame_state, *effect, *control);
+      result = LowerCheckedInt32Mod(node, frame_state);
       break;
     case IrOpcode::kCheckedUint32Div:
-      state = LowerCheckedUint32Div(node, frame_state, *effect, *control);
+      result = LowerCheckedUint32Div(node, frame_state);
       break;
     case IrOpcode::kCheckedUint32Mod:
-      state = LowerCheckedUint32Mod(node, frame_state, *effect, *control);
+      result = LowerCheckedUint32Mod(node, frame_state);
       break;
     case IrOpcode::kCheckedInt32Mul:
-      state = LowerCheckedInt32Mul(node, frame_state, *effect, *control);
+      result = LowerCheckedInt32Mul(node, frame_state);
+      break;
+    case IrOpcode::kCheckedInt32ToTaggedSigned:
+      result = LowerCheckedInt32ToTaggedSigned(node, frame_state);
       break;
     case IrOpcode::kCheckedUint32ToInt32:
-      state = LowerCheckedUint32ToInt32(node, frame_state, *effect, *control);
+      result = LowerCheckedUint32ToInt32(node, frame_state);
+      break;
+    case IrOpcode::kCheckedUint32ToTaggedSigned:
+      result = LowerCheckedUint32ToTaggedSigned(node, frame_state);
       break;
     case IrOpcode::kCheckedFloat64ToInt32:
-      state = LowerCheckedFloat64ToInt32(node, frame_state, *effect, *control);
+      result = LowerCheckedFloat64ToInt32(node, frame_state);
       break;
     case IrOpcode::kCheckedTaggedSignedToInt32:
-      state =
-          LowerCheckedTaggedSignedToInt32(node, frame_state, *effect, *control);
+      if (frame_state == nullptr) {
+        FATAL("No frame state (zapped by #%d: %s)", frame_state_zapper_->id(),
+              frame_state_zapper_->op()->mnemonic());
+      }
+      result = LowerCheckedTaggedSignedToInt32(node, frame_state);
       break;
     case IrOpcode::kCheckedTaggedToInt32:
-      state = LowerCheckedTaggedToInt32(node, frame_state, *effect, *control);
+      result = LowerCheckedTaggedToInt32(node, frame_state);
       break;
     case IrOpcode::kCheckedTaggedToFloat64:
-      state = LowerCheckedTaggedToFloat64(node, frame_state, *effect, *control);
+      result = LowerCheckedTaggedToFloat64(node, frame_state);
+      break;
+    case IrOpcode::kCheckedTaggedToTaggedSigned:
+      result = LowerCheckedTaggedToTaggedSigned(node, frame_state);
+      break;
+    case IrOpcode::kCheckedTaggedToTaggedPointer:
+      result = LowerCheckedTaggedToTaggedPointer(node, frame_state);
       break;
     case IrOpcode::kTruncateTaggedToWord32:
-      state = LowerTruncateTaggedToWord32(node, *effect, *control);
+      result = LowerTruncateTaggedToWord32(node);
       break;
     case IrOpcode::kCheckedTruncateTaggedToWord32:
-      state = LowerCheckedTruncateTaggedToWord32(node, frame_state, *effect,
-                                                 *control);
+      result = LowerCheckedTruncateTaggedToWord32(node, frame_state);
+      break;
+    case IrOpcode::kNumberToString:
+      result = LowerNumberToString(node);
+      break;
+    case IrOpcode::kObjectIsArrayBufferView:
+      result = LowerObjectIsArrayBufferView(node);
+      break;
+    case IrOpcode::kObjectIsBigInt:
+      result = LowerObjectIsBigInt(node);
       break;
     case IrOpcode::kObjectIsCallable:
-      state = LowerObjectIsCallable(node, *effect, *control);
+      result = LowerObjectIsCallable(node);
+      break;
+    case IrOpcode::kObjectIsConstructor:
+      result = LowerObjectIsConstructor(node);
+      break;
+    case IrOpcode::kObjectIsDetectableCallable:
+      result = LowerObjectIsDetectableCallable(node);
+      break;
+    case IrOpcode::kObjectIsMinusZero:
+      result = LowerObjectIsMinusZero(node);
+      break;
+    case IrOpcode::kObjectIsNaN:
+      result = LowerObjectIsNaN(node);
+      break;
+    case IrOpcode::kNumberIsNaN:
+      result = LowerNumberIsNaN(node);
+      break;
+    case IrOpcode::kObjectIsNonCallable:
+      result = LowerObjectIsNonCallable(node);
       break;
     case IrOpcode::kObjectIsNumber:
-      state = LowerObjectIsNumber(node, *effect, *control);
+      result = LowerObjectIsNumber(node);
       break;
     case IrOpcode::kObjectIsReceiver:
-      state = LowerObjectIsReceiver(node, *effect, *control);
+      result = LowerObjectIsReceiver(node);
       break;
     case IrOpcode::kObjectIsSmi:
-      state = LowerObjectIsSmi(node, *effect, *control);
+      result = LowerObjectIsSmi(node);
       break;
     case IrOpcode::kObjectIsString:
-      state = LowerObjectIsString(node, *effect, *control);
+      result = LowerObjectIsString(node);
+      break;
+    case IrOpcode::kObjectIsSymbol:
+      result = LowerObjectIsSymbol(node);
       break;
     case IrOpcode::kObjectIsUndetectable:
-      state = LowerObjectIsUndetectable(node, *effect, *control);
+      result = LowerObjectIsUndetectable(node);
       break;
-    case IrOpcode::kStringFromCharCode:
-      state = LowerStringFromCharCode(node, *effect, *control);
+    case IrOpcode::kArgumentsFrame:
+      result = LowerArgumentsFrame(node);
+      break;
+    case IrOpcode::kArgumentsLength:
+      result = LowerArgumentsLength(node);
+      break;
+    case IrOpcode::kToBoolean:
+      result = LowerToBoolean(node);
+      break;
+    case IrOpcode::kTypeOf:
+      result = LowerTypeOf(node);
+      break;
+    case IrOpcode::kNewDoubleElements:
+      result = LowerNewDoubleElements(node);
+      break;
+    case IrOpcode::kNewSmiOrObjectElements:
+      result = LowerNewSmiOrObjectElements(node);
+      break;
+    case IrOpcode::kNewArgumentsElements:
+      result = LowerNewArgumentsElements(node);
+      break;
+    case IrOpcode::kNewConsString:
+      result = LowerNewConsString(node);
+      break;
+    case IrOpcode::kArrayBufferWasNeutered:
+      result = LowerArrayBufferWasNeutered(node);
+      break;
+    case IrOpcode::kSameValue:
+      result = LowerSameValue(node);
+      break;
+    case IrOpcode::kDeadValue:
+      result = LowerDeadValue(node);
+      break;
+    case IrOpcode::kStringFromSingleCharCode:
+      result = LowerStringFromSingleCharCode(node);
+      break;
+    case IrOpcode::kStringFromSingleCodePoint:
+      result = LowerStringFromSingleCodePoint(node);
+      break;
+    case IrOpcode::kStringIndexOf:
+      result = LowerStringIndexOf(node);
+      break;
+    case IrOpcode::kStringLength:
+      result = LowerStringLength(node);
+      break;
+    case IrOpcode::kStringToNumber:
+      result = LowerStringToNumber(node);
       break;
     case IrOpcode::kStringCharCodeAt:
-      state = LowerStringCharCodeAt(node, *effect, *control);
+      result = LowerStringCharCodeAt(node);
+      break;
+    case IrOpcode::kStringCodePointAt:
+      result = LowerStringCodePointAt(node, UnicodeEncodingOf(node->op()));
+      break;
+    case IrOpcode::kStringToLowerCaseIntl:
+      result = LowerStringToLowerCaseIntl(node);
+      break;
+    case IrOpcode::kStringToUpperCaseIntl:
+      result = LowerStringToUpperCaseIntl(node);
+      break;
+    case IrOpcode::kStringSubstring:
+      result = LowerStringSubstring(node);
+      break;
+    case IrOpcode::kStringEqual:
+      result = LowerStringEqual(node);
+      break;
+    case IrOpcode::kStringLessThan:
+      result = LowerStringLessThan(node);
+      break;
+    case IrOpcode::kStringLessThanOrEqual:
+      result = LowerStringLessThanOrEqual(node);
+      break;
+    case IrOpcode::kNumberIsFloat64Hole:
+      result = LowerNumberIsFloat64Hole(node);
+      break;
+    case IrOpcode::kNumberIsFinite:
+      result = LowerNumberIsFinite(node);
+      break;
+    case IrOpcode::kObjectIsFiniteNumber:
+      result = LowerObjectIsFiniteNumber(node);
+      break;
+    case IrOpcode::kNumberIsInteger:
+      result = LowerNumberIsInteger(node);
+      break;
+    case IrOpcode::kObjectIsInteger:
+      result = LowerObjectIsInteger(node);
+      break;
+    case IrOpcode::kNumberIsSafeInteger:
+      result = LowerNumberIsSafeInteger(node);
+      break;
+    case IrOpcode::kObjectIsSafeInteger:
+      result = LowerObjectIsSafeInteger(node);
       break;
     case IrOpcode::kCheckFloat64Hole:
-      state = LowerCheckFloat64Hole(node, frame_state, *effect, *control);
+      result = LowerCheckFloat64Hole(node, frame_state);
       break;
-    case IrOpcode::kCheckTaggedHole:
-      state = LowerCheckTaggedHole(node, frame_state, *effect, *control);
+    case IrOpcode::kCheckNotTaggedHole:
+      result = LowerCheckNotTaggedHole(node, frame_state);
       break;
     case IrOpcode::kConvertTaggedHoleToUndefined:
-      state = LowerConvertTaggedHoleToUndefined(node, *effect, *control);
+      result = LowerConvertTaggedHoleToUndefined(node);
+      break;
+    case IrOpcode::kCheckEqualsInternalizedString:
+      LowerCheckEqualsInternalizedString(node, frame_state);
+      break;
+    case IrOpcode::kAllocate:
+      result = LowerAllocate(node);
+      break;
+    case IrOpcode::kCheckEqualsSymbol:
+      LowerCheckEqualsSymbol(node, frame_state);
       break;
     case IrOpcode::kPlainPrimitiveToNumber:
-      state = LowerPlainPrimitiveToNumber(node, *effect, *control);
+      result = LowerPlainPrimitiveToNumber(node);
       break;
     case IrOpcode::kPlainPrimitiveToWord32:
-      state = LowerPlainPrimitiveToWord32(node, *effect, *control);
+      result = LowerPlainPrimitiveToWord32(node);
       break;
     case IrOpcode::kPlainPrimitiveToFloat64:
-      state = LowerPlainPrimitiveToFloat64(node, *effect, *control);
+      result = LowerPlainPrimitiveToFloat64(node);
       break;
     case IrOpcode::kEnsureWritableFastElements:
-      state = LowerEnsureWritableFastElements(node, *effect, *control);
+      result = LowerEnsureWritableFastElements(node);
       break;
     case IrOpcode::kMaybeGrowFastElements:
-      state = LowerMaybeGrowFastElements(node, frame_state, *effect, *control);
+      result = LowerMaybeGrowFastElements(node, frame_state);
       break;
     case IrOpcode::kTransitionElementsKind:
-      state = LowerTransitionElementsKind(node, *effect, *control);
+      LowerTransitionElementsKind(node);
+      break;
+    case IrOpcode::kLoadFieldByIndex:
+      result = LowerLoadFieldByIndex(node);
       break;
     case IrOpcode::kLoadTypedElement:
-      state = LowerLoadTypedElement(node, *effect, *control);
+      result = LowerLoadTypedElement(node);
+      break;
+    case IrOpcode::kLoadDataViewElement:
+      result = LowerLoadDataViewElement(node);
       break;
     case IrOpcode::kStoreTypedElement:
-      state = LowerStoreTypedElement(node, *effect, *control);
+      LowerStoreTypedElement(node);
+      break;
+    case IrOpcode::kStoreDataViewElement:
+      LowerStoreDataViewElement(node);
+      break;
+    case IrOpcode::kStoreSignedSmallElement:
+      LowerStoreSignedSmallElement(node);
+      break;
+    case IrOpcode::kFindOrderedHashMapEntry:
+      result = LowerFindOrderedHashMapEntry(node);
+      break;
+    case IrOpcode::kFindOrderedHashMapEntryForInt32Key:
+      result = LowerFindOrderedHashMapEntryForInt32Key(node);
+      break;
+    case IrOpcode::kTransitionAndStoreNumberElement:
+      LowerTransitionAndStoreNumberElement(node);
+      break;
+    case IrOpcode::kTransitionAndStoreNonNumberElement:
+      LowerTransitionAndStoreNonNumberElement(node);
+      break;
+    case IrOpcode::kTransitionAndStoreElement:
+      LowerTransitionAndStoreElement(node);
+      break;
+    case IrOpcode::kRuntimeAbort:
+      LowerRuntimeAbort(node);
+      break;
+    case IrOpcode::kConvertReceiver:
+      result = LowerConvertReceiver(node);
       break;
     case IrOpcode::kFloat64RoundUp:
-      state = LowerFloat64RoundUp(node, *effect, *control);
+      if (!LowerFloat64RoundUp(node).To(&result)) {
+        return false;
+      }
       break;
     case IrOpcode::kFloat64RoundDown:
-      state = LowerFloat64RoundDown(node, *effect, *control);
+      if (!LowerFloat64RoundDown(node).To(&result)) {
+        return false;
+      }
       break;
     case IrOpcode::kFloat64RoundTruncate:
-      state = LowerFloat64RoundTruncate(node, *effect, *control);
+      if (!LowerFloat64RoundTruncate(node).To(&result)) {
+        return false;
+      }
+      break;
+    case IrOpcode::kFloat64RoundTiesEven:
+      if (!LowerFloat64RoundTiesEven(node).To(&result)) {
+        return false;
+      }
+      break;
+    case IrOpcode::kDateNow:
+      result = LowerDateNow(node);
       break;
     default:
       return false;
   }
-  NodeProperties::ReplaceUses(node, state.value, state.effect, state.control);
-  *effect = state.effect;
-  *control = state.control;
+
+  if ((result ? 1 : 0) != node->op()->ValueOutputCount()) {
+    FATAL(
+        "Effect control linearizer lowering of '%s':"
+        " value output count does not agree.",
+        node->op()->mnemonic());
+  }
+
+  *effect = gasm()->ExtractCurrentEffect();
+  *control = gasm()->ExtractCurrentControl();
+  NodeProperties::ReplaceUses(node, result, *effect, *control);
   return true;
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerChangeFloat64ToTagged(Node* node, Node* effect,
-                                                    Node* control) {
+#define __ gasm()->
+
+Node* EffectControlLinearizer::LowerChangeFloat64ToTagged(Node* node) {
   CheckForMinusZeroMode mode = CheckMinusZeroModeOf(node->op());
   Node* value = node->InputAt(0);
 
-  Node* value32 = graph()->NewNode(machine()->RoundFloat64ToInt32(), value);
-  Node* check_same = graph()->NewNode(
-      machine()->Float64Equal(), value,
-      graph()->NewNode(machine()->ChangeInt32ToFloat64(), value32));
-  Node* branch_same = graph()->NewNode(common()->Branch(), check_same, control);
+  auto done = __ MakeLabel(MachineRepresentation::kTagged);
+  auto if_heapnumber = __ MakeDeferredLabel();
+  auto if_int32 = __ MakeLabel();
 
-  Node* if_smi = graph()->NewNode(common()->IfTrue(), branch_same);
-  Node* vsmi;
-  Node* if_box = graph()->NewNode(common()->IfFalse(), branch_same);
+  Node* value32 = __ RoundFloat64ToInt32(value);
+  __ GotoIf(__ Float64Equal(value, __ ChangeInt32ToFloat64(value32)),
+            &if_int32);
+  __ Goto(&if_heapnumber);
 
-  if (mode == CheckForMinusZeroMode::kCheckForMinusZero) {
-    // Check if {value} is -0.
-    Node* check_zero = graph()->NewNode(machine()->Word32Equal(), value32,
-                                        jsgraph()->Int32Constant(0));
-    Node* branch_zero = graph()->NewNode(common()->Branch(BranchHint::kFalse),
-                                         check_zero, if_smi);
-
-    Node* if_zero = graph()->NewNode(common()->IfTrue(), branch_zero);
-    Node* if_notzero = graph()->NewNode(common()->IfFalse(), branch_zero);
-
-    // In case of 0, we need to check the high bits for the IEEE -0 pattern.
-    Node* check_negative = graph()->NewNode(
-        machine()->Int32LessThan(),
-        graph()->NewNode(machine()->Float64ExtractHighWord32(), value),
-        jsgraph()->Int32Constant(0));
-    Node* branch_negative = graph()->NewNode(
-        common()->Branch(BranchHint::kFalse), check_negative, if_zero);
-
-    Node* if_negative = graph()->NewNode(common()->IfTrue(), branch_negative);
-    Node* if_notnegative =
-        graph()->NewNode(common()->IfFalse(), branch_negative);
-
-    // We need to create a box for negative 0.
-    if_smi = graph()->NewNode(common()->Merge(2), if_notzero, if_notnegative);
-    if_box = graph()->NewNode(common()->Merge(2), if_box, if_negative);
-  }
-
-  // On 64-bit machines we can just wrap the 32-bit integer in a smi, for 32-bit
-  // machines we need to deal with potential overflow and fallback to boxing.
-  if (machine()->Is64()) {
-    vsmi = ChangeInt32ToSmi(value32);
-  } else {
-    Node* smi_tag = graph()->NewNode(machine()->Int32AddWithOverflow(), value32,
-                                     value32, if_smi);
-
-    Node* check_ovf =
-        graph()->NewNode(common()->Projection(1), smi_tag, if_smi);
-    Node* branch_ovf = graph()->NewNode(common()->Branch(BranchHint::kFalse),
-                                        check_ovf, if_smi);
-
-    Node* if_ovf = graph()->NewNode(common()->IfTrue(), branch_ovf);
-    if_box = graph()->NewNode(common()->Merge(2), if_ovf, if_box);
-
-    if_smi = graph()->NewNode(common()->IfFalse(), branch_ovf);
-    vsmi = graph()->NewNode(common()->Projection(0), smi_tag, if_smi);
-  }
-
-  // Allocate the box for the {value}.
-  ValueEffectControl box = AllocateHeapNumberWithValue(value, effect, if_box);
-
-  control = graph()->NewNode(common()->Merge(2), if_smi, box.control);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kTagged, 2),
-                           vsmi, box.value, control);
-  effect =
-      graph()->NewNode(common()->EffectPhi(2), effect, box.effect, control);
-  return ValueEffectControl(value, effect, control);
-}
-
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerChangeBitToTagged(Node* node, Node* effect,
-                                                Node* control) {
-  Node* value = node->InputAt(0);
-
-  Node* branch = graph()->NewNode(common()->Branch(), value, control);
-
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* vtrue = jsgraph()->TrueConstant();
-
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* vfalse = jsgraph()->FalseConstant();
-
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kTagged, 2),
-                           vtrue, vfalse, control);
-
-  return ValueEffectControl(value, effect, control);
-}
-
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerChangeInt31ToTaggedSigned(Node* node,
-                                                        Node* effect,
-                                                        Node* control) {
-  Node* value = node->InputAt(0);
-  value = ChangeInt32ToSmi(value);
-  return ValueEffectControl(value, effect, control);
-}
-
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerChangeInt32ToTagged(Node* node, Node* effect,
-                                                  Node* control) {
-  Node* value = node->InputAt(0);
-
-  if (machine()->Is64()) {
-    return ValueEffectControl(ChangeInt32ToSmi(value), effect, control);
-  }
-
-  Node* add = graph()->NewNode(machine()->Int32AddWithOverflow(), value, value,
-                               control);
-
-  Node* ovf = graph()->NewNode(common()->Projection(1), add, control);
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kFalse), ovf, control);
-
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  ValueEffectControl alloc =
-      AllocateHeapNumberWithValue(ChangeInt32ToFloat64(value), effect, if_true);
-
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* vfalse = graph()->NewNode(common()->Projection(0), add, if_false);
-
-  Node* merge = graph()->NewNode(common()->Merge(2), alloc.control, if_false);
-  Node* phi = graph()->NewNode(common()->Phi(MachineRepresentation::kTagged, 2),
-                               alloc.value, vfalse, merge);
-  Node* ephi =
-      graph()->NewNode(common()->EffectPhi(2), alloc.effect, effect, merge);
-
-  return ValueEffectControl(phi, ephi, merge);
-}
-
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerChangeUint32ToTagged(Node* node, Node* effect,
-                                                   Node* control) {
-  Node* value = node->InputAt(0);
-
-  Node* check = graph()->NewNode(machine()->Uint32LessThanOrEqual(), value,
-                                 SmiMaxValueConstant());
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check, control);
-
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* vtrue = ChangeUint32ToSmi(value);
-
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  ValueEffectControl alloc = AllocateHeapNumberWithValue(
-      ChangeUint32ToFloat64(value), effect, if_false);
-
-  Node* merge = graph()->NewNode(common()->Merge(2), if_true, alloc.control);
-  Node* phi = graph()->NewNode(common()->Phi(MachineRepresentation::kTagged, 2),
-                               vtrue, alloc.value, merge);
-  Node* ephi =
-      graph()->NewNode(common()->EffectPhi(2), effect, alloc.effect, merge);
-
-  return ValueEffectControl(phi, ephi, merge);
-}
-
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerChangeTaggedSignedToInt32(Node* node,
-                                                        Node* effect,
-                                                        Node* control) {
-  Node* value = node->InputAt(0);
-  value = ChangeSmiToInt32(value);
-  return ValueEffectControl(value, effect, control);
-}
-
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerChangeTaggedToBit(Node* node, Node* effect,
-                                                Node* control) {
-  Node* value = node->InputAt(0);
-  value = graph()->NewNode(machine()->WordEqual(), value,
-                           jsgraph()->TrueConstant());
-  return ValueEffectControl(value, effect, control);
-}
-
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerChangeTaggedToInt32(Node* node, Node* effect,
-                                                  Node* control) {
-  Node* value = node->InputAt(0);
-
-  Node* check = ObjectIsSmi(value);
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check, control);
-
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
-  Node* vtrue = ChangeSmiToInt32(value);
-
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* efalse = effect;
-  Node* vfalse;
+  __ Bind(&if_int32);
   {
-    STATIC_ASSERT(HeapNumber::kValueOffset == Oddball::kToNumberRawOffset);
-    vfalse = efalse = graph()->NewNode(
-        simplified()->LoadField(AccessBuilder::ForHeapNumberValue()), value,
-        efalse, if_false);
-    vfalse = graph()->NewNode(machine()->ChangeFloat64ToInt32(), vfalse);
-  }
+    if (mode == CheckForMinusZeroMode::kCheckForMinusZero) {
+      Node* zero = __ Int32Constant(0);
+      auto if_zero = __ MakeDeferredLabel();
+      auto if_smi = __ MakeLabel();
 
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, control);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 2),
-                           vtrue, vfalse, control);
+      __ GotoIf(__ Word32Equal(value32, zero), &if_zero);
+      __ Goto(&if_smi);
 
-  return ValueEffectControl(value, effect, control);
-}
+      __ Bind(&if_zero);
+      {
+        // In case of 0, we need to check the high bits for the IEEE -0 pattern.
+        __ GotoIf(__ Int32LessThan(__ Float64ExtractHighWord32(value), zero),
+                  &if_heapnumber);
+        __ Goto(&if_smi);
+      }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerChangeTaggedToUint32(Node* node, Node* effect,
-                                                   Node* control) {
-  Node* value = node->InputAt(0);
+      __ Bind(&if_smi);
+    }
 
-  Node* check = ObjectIsSmi(value);
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check, control);
-
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
-  Node* vtrue = ChangeSmiToInt32(value);
-
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* efalse = effect;
-  Node* vfalse;
-  {
-    STATIC_ASSERT(HeapNumber::kValueOffset == Oddball::kToNumberRawOffset);
-    vfalse = efalse = graph()->NewNode(
-        simplified()->LoadField(AccessBuilder::ForHeapNumberValue()), value,
-        efalse, if_false);
-    vfalse = graph()->NewNode(machine()->ChangeFloat64ToUint32(), vfalse);
-  }
-
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, control);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 2),
-                           vtrue, vfalse, control);
-
-  return ValueEffectControl(value, effect, control);
-}
-
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerChangeTaggedToFloat64(Node* node, Node* effect,
-                                                    Node* control) {
-  return LowerTruncateTaggedToFloat64(node, effect, control);
-}
-
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerTruncateTaggedToFloat64(Node* node, Node* effect,
-                                                      Node* control) {
-  Node* value = node->InputAt(0);
-
-  Node* check = ObjectIsSmi(value);
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check, control);
-
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
-  Node* vtrue;
-  {
-    vtrue = ChangeSmiToInt32(value);
-    vtrue = graph()->NewNode(machine()->ChangeInt32ToFloat64(), vtrue);
-  }
-
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* efalse = effect;
-  Node* vfalse;
-  {
-    STATIC_ASSERT(HeapNumber::kValueOffset == Oddball::kToNumberRawOffset);
-    vfalse = efalse = graph()->NewNode(
-        simplified()->LoadField(AccessBuilder::ForHeapNumberValue()), value,
-        efalse, if_false);
-  }
-
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, control);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2),
-                           vtrue, vfalse, control);
-
-  return ValueEffectControl(value, effect, control);
-}
-
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckBounds(Node* node, Node* frame_state,
-                                          Node* effect, Node* control) {
-  Node* index = node->InputAt(0);
-  Node* limit = node->InputAt(1);
-
-  Node* check = graph()->NewNode(machine()->Uint32LessThan(), index, limit);
-  control = effect = graph()->NewNode(
-      common()->DeoptimizeUnless(DeoptimizeReason::kOutOfBounds), check,
-      frame_state, effect, control);
-
-  return ValueEffectControl(index, effect, control);
-}
-
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckMaps(Node* node, Node* frame_state,
-                                        Node* effect, Node* control) {
-  Node* value = node->InputAt(0);
-
-  // Load the current map of the {value}.
-  Node* value_map = effect = graph()->NewNode(
-      simplified()->LoadField(AccessBuilder::ForMap()), value, effect, control);
-
-  int const map_count = node->op()->ValueInputCount() - 1;
-  Node** controls = temp_zone()->NewArray<Node*>(map_count);
-  Node** effects = temp_zone()->NewArray<Node*>(map_count + 1);
-
-  for (int i = 0; i < map_count; ++i) {
-    Node* map = node->InputAt(1 + i);
-
-    Node* check = graph()->NewNode(machine()->WordEqual(), value_map, map);
-    if (i == map_count - 1) {
-      controls[i] = effects[i] = graph()->NewNode(
-          common()->DeoptimizeUnless(DeoptimizeReason::kWrongMap), check,
-          frame_state, effect, control);
+    if (SmiValuesAre32Bits()) {
+      Node* value_smi = ChangeInt32ToSmi(value32);
+      __ Goto(&done, value_smi);
     } else {
-      control = graph()->NewNode(common()->Branch(), check, control);
-      controls[i] = graph()->NewNode(common()->IfTrue(), control);
-      control = graph()->NewNode(common()->IfFalse(), control);
-      effects[i] = effect;
+      DCHECK(SmiValuesAre31Bits());
+      Node* add = __ Int32AddWithOverflow(value32, value32);
+      Node* ovf = __ Projection(1, add);
+      __ GotoIf(ovf, &if_heapnumber);
+      Node* value_smi = __ Projection(0, add);
+      value_smi = ChangeInt32ToIntPtr(value_smi);
+      __ Goto(&done, value_smi);
     }
   }
 
-  control = graph()->NewNode(common()->Merge(map_count), map_count, controls);
-  effects[map_count] = control;
-  effect =
-      graph()->NewNode(common()->EffectPhi(map_count), map_count + 1, effects);
-
-  return ValueEffectControl(value, effect, control);
-}
-
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckNumber(Node* node, Node* frame_state,
-                                          Node* effect, Node* control) {
-  Node* value = node->InputAt(0);
-
-  Node* check0 = ObjectIsSmi(value);
-  Node* branch0 =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check0, control);
-
-  Node* if_true0 = graph()->NewNode(common()->IfTrue(), branch0);
-  Node* etrue0 = effect;
-
-  Node* if_false0 = graph()->NewNode(common()->IfFalse(), branch0);
-  Node* efalse0 = effect;
+  __ Bind(&if_heapnumber);
   {
-    Node* value_map = efalse0 =
-        graph()->NewNode(simplified()->LoadField(AccessBuilder::ForMap()),
-                         value, efalse0, if_false0);
-    Node* check1 = graph()->NewNode(machine()->WordEqual(), value_map,
-                                    jsgraph()->HeapNumberMapConstant());
-    if_false0 = efalse0 = graph()->NewNode(
-        common()->DeoptimizeUnless(DeoptimizeReason::kNotAHeapNumber), check1,
-        frame_state, efalse0, if_false0);
+    Node* value_number = AllocateHeapNumberWithValue(value);
+    __ Goto(&done, value_number);
   }
 
-  control = graph()->NewNode(common()->Merge(2), if_true0, if_false0);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue0, efalse0, control);
-
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckString(Node* node, Node* frame_state,
-                                          Node* effect, Node* control) {
+Node* EffectControlLinearizer::LowerChangeFloat64ToTaggedPointer(Node* node) {
   Node* value = node->InputAt(0);
+  return AllocateHeapNumberWithValue(value);
+}
+
+Node* EffectControlLinearizer::LowerChangeBitToTagged(Node* node) {
+  Node* value = node->InputAt(0);
+
+  auto if_true = __ MakeLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kTagged);
+
+  __ GotoIf(value, &if_true);
+  __ Goto(&done, __ FalseConstant());
+
+  __ Bind(&if_true);
+  __ Goto(&done, __ TrueConstant());
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerChangeInt31ToTaggedSigned(Node* node) {
+  Node* value = node->InputAt(0);
+  return ChangeInt32ToSmi(value);
+}
+
+Node* EffectControlLinearizer::LowerChangeInt32ToTagged(Node* node) {
+  Node* value = node->InputAt(0);
+
+  if (SmiValuesAre32Bits()) {
+    return ChangeInt32ToSmi(value);
+  }
+  DCHECK(SmiValuesAre31Bits());
+
+  auto if_overflow = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kTagged);
+
+  Node* add = __ Int32AddWithOverflow(value, value);
+  Node* ovf = __ Projection(1, add);
+  __ GotoIf(ovf, &if_overflow);
+  Node* value_smi = __ Projection(0, add);
+  value_smi = ChangeInt32ToIntPtr(value_smi);
+  __ Goto(&done, value_smi);
+
+  __ Bind(&if_overflow);
+  Node* number = AllocateHeapNumberWithValue(__ ChangeInt32ToFloat64(value));
+  __ Goto(&done, number);
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerChangeUint32ToTagged(Node* node) {
+  Node* value = node->InputAt(0);
+
+  auto if_not_in_smi_range = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kTagged);
+
+  Node* check = __ Uint32LessThanOrEqual(value, SmiMaxValueConstant());
+  __ GotoIfNot(check, &if_not_in_smi_range);
+  __ Goto(&done, ChangeUint32ToSmi(value));
+
+  __ Bind(&if_not_in_smi_range);
+  Node* number = AllocateHeapNumberWithValue(__ ChangeUint32ToFloat64(value));
+
+  __ Goto(&done, number);
+  __ Bind(&done);
+
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerChangeTaggedSignedToInt32(Node* node) {
+  Node* value = node->InputAt(0);
+  return ChangeSmiToInt32(value);
+}
+
+Node* EffectControlLinearizer::LowerChangeTaggedToBit(Node* node) {
+  Node* value = node->InputAt(0);
+  return __ WordEqual(value, __ TrueConstant());
+}
+
+void EffectControlLinearizer::TruncateTaggedPointerToBit(
+    Node* node, GraphAssemblerLabel<1>* done) {
+  Node* value = node->InputAt(0);
+
+  auto if_heapnumber = __ MakeDeferredLabel();
+  auto if_bigint = __ MakeDeferredLabel();
+
+  Node* zero = __ Int32Constant(0);
+  Node* fzero = __ Float64Constant(0.0);
+
+  // Check if {value} is false.
+  __ GotoIf(__ WordEqual(value, __ FalseConstant()), done, zero);
+
+  // Check if {value} is the empty string.
+  __ GotoIf(__ WordEqual(value, __ EmptyStringConstant()), done, zero);
+
+  // Load the map of {value}.
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+
+  // Check if the {value} is undetectable and immediately return false.
+  // This includes undefined and null.
+  Node* value_map_bitfield =
+      __ LoadField(AccessBuilder::ForMapBitField(), value_map);
+  __ GotoIfNot(
+      __ Word32Equal(
+          __ Word32And(value_map_bitfield,
+                       __ Int32Constant(Map::IsUndetectableBit::kMask)),
+          zero),
+      done, zero);
+
+  // Check if {value} is a HeapNumber.
+  __ GotoIf(__ WordEqual(value_map, __ HeapNumberMapConstant()),
+            &if_heapnumber);
+
+  // Check if {value} is a BigInt.
+  Node* value_instance_type =
+      __ LoadField(AccessBuilder::ForMapInstanceType(), value_map);
+  __ GotoIf(__ Word32Equal(value_instance_type, __ Int32Constant(BIGINT_TYPE)),
+            &if_bigint);
+
+  // All other values that reach here are true.
+  __ Goto(done, __ Int32Constant(1));
+
+  __ Bind(&if_heapnumber);
+  {
+    // For HeapNumber {value}, just check that its value is not 0.0, -0.0 or
+    // NaN.
+    Node* value_value =
+        __ LoadField(AccessBuilder::ForHeapNumberValue(), value);
+    __ Goto(done, __ Float64LessThan(fzero, __ Float64Abs(value_value)));
+  }
+
+  __ Bind(&if_bigint);
+  {
+    Node* bitfield = __ LoadField(AccessBuilder::ForBigIntBitfield(), value);
+    Node* length_is_zero = __ WordEqual(
+        __ WordAnd(bitfield, __ IntPtrConstant(BigInt::LengthBits::kMask)),
+        __ IntPtrConstant(0));
+    __ Goto(done, __ Word32Equal(length_is_zero, zero));
+  }
+}
+
+Node* EffectControlLinearizer::LowerTruncateTaggedToBit(Node* node) {
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
+  auto if_smi = __ MakeDeferredLabel();
+
+  Node* value = node->InputAt(0);
+  __ GotoIf(ObjectIsSmi(value), &if_smi);
+
+  TruncateTaggedPointerToBit(node, &done);
+
+  __ Bind(&if_smi);
+  {
+    // If {value} is a Smi, then we only need to check that it's not zero.
+    __ Goto(&done, __ Word32Equal(__ WordEqual(value, __ IntPtrConstant(0)),
+                                  __ Int32Constant(0)));
+  }
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerTruncateTaggedPointerToBit(Node* node) {
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
+
+  TruncateTaggedPointerToBit(node, &done);
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerChangeTaggedToInt32(Node* node) {
+  Node* value = node->InputAt(0);
+
+  auto if_not_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kWord32);
+
+  Node* check = ObjectIsSmi(value);
+  __ GotoIfNot(check, &if_not_smi);
+  __ Goto(&done, ChangeSmiToInt32(value));
+
+  __ Bind(&if_not_smi);
+  STATIC_ASSERT(HeapNumber::kValueOffset == Oddball::kToNumberRawOffset);
+  Node* vfalse = __ LoadField(AccessBuilder::ForHeapNumberValue(), value);
+  vfalse = __ ChangeFloat64ToInt32(vfalse);
+  __ Goto(&done, vfalse);
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerChangeTaggedToUint32(Node* node) {
+  Node* value = node->InputAt(0);
+
+  auto if_not_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kWord32);
+
+  Node* check = ObjectIsSmi(value);
+  __ GotoIfNot(check, &if_not_smi);
+  __ Goto(&done, ChangeSmiToInt32(value));
+
+  __ Bind(&if_not_smi);
+  STATIC_ASSERT(HeapNumber::kValueOffset == Oddball::kToNumberRawOffset);
+  Node* vfalse = __ LoadField(AccessBuilder::ForHeapNumberValue(), value);
+  vfalse = __ ChangeFloat64ToUint32(vfalse);
+  __ Goto(&done, vfalse);
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerChangeTaggedToFloat64(Node* node) {
+  return LowerTruncateTaggedToFloat64(node);
+}
+
+Node* EffectControlLinearizer::LowerChangeTaggedToTaggedSigned(Node* node) {
+  Node* value = node->InputAt(0);
+
+  auto if_not_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kWord32);
+
+  Node* check = ObjectIsSmi(value);
+  __ GotoIfNot(check, &if_not_smi);
+  __ Goto(&done, value);
+
+  __ Bind(&if_not_smi);
+  STATIC_ASSERT(HeapNumber::kValueOffset == Oddball::kToNumberRawOffset);
+  Node* vfalse = __ LoadField(AccessBuilder::ForHeapNumberValue(), value);
+  vfalse = __ ChangeFloat64ToInt32(vfalse);
+  vfalse = ChangeInt32ToSmi(vfalse);
+  __ Goto(&done, vfalse);
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerTruncateTaggedToFloat64(Node* node) {
+  Node* value = node->InputAt(0);
+
+  auto if_not_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kFloat64);
+
+  Node* check = ObjectIsSmi(value);
+  __ GotoIfNot(check, &if_not_smi);
+  Node* vtrue = ChangeSmiToInt32(value);
+  vtrue = __ ChangeInt32ToFloat64(vtrue);
+  __ Goto(&done, vtrue);
+
+  __ Bind(&if_not_smi);
+  STATIC_ASSERT(HeapNumber::kValueOffset == Oddball::kToNumberRawOffset);
+  Node* vfalse = __ LoadField(AccessBuilder::ForHeapNumberValue(), value);
+  __ Goto(&done, vfalse);
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerCheckBounds(Node* node, Node* frame_state) {
+  Node* index = node->InputAt(0);
+  Node* limit = node->InputAt(1);
+  const CheckParameters& params = CheckParametersOf(node->op());
+
+  Node* check = __ Uint32LessThan(index, limit);
+  __ DeoptimizeIfNot(DeoptimizeReason::kOutOfBounds, params.feedback(), check,
+                     frame_state, IsSafetyCheck::kCriticalSafetyCheck);
+  return index;
+}
+
+Node* EffectControlLinearizer::LowerPoisonIndex(Node* node) {
+  Node* index = node->InputAt(0);
+  if (mask_array_index_ == kMaskArrayIndex) {
+    index = __ Word32PoisonOnSpeculation(index);
+  }
+  return index;
+}
+
+void EffectControlLinearizer::LowerCheckMaps(Node* node, Node* frame_state) {
+  CheckMapsParameters const& p = CheckMapsParametersOf(node->op());
+  Node* value = node->InputAt(0);
+
+  ZoneHandleSet<Map> const& maps = p.maps();
+  size_t const map_count = maps.size();
+
+  if (p.flags() & CheckMapsFlag::kTryMigrateInstance) {
+    auto done = __ MakeDeferredLabel();
+    auto migrate = __ MakeDeferredLabel();
+
+    // Load the current map of the {value}.
+    Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+
+    // Perform the map checks.
+    for (size_t i = 0; i < map_count; ++i) {
+      Node* map = __ HeapConstant(maps[i]);
+      Node* check = __ WordEqual(value_map, map);
+      if (i == map_count - 1) {
+        __ GotoIfNot(check, &migrate);
+        __ Goto(&done);
+      } else {
+        __ GotoIf(check, &done);
+      }
+    }
+
+    // Perform the (deferred) instance migration.
+    __ Bind(&migrate);
+    {
+      // If map is not deprecated the migration attempt does not make sense.
+      Node* bitfield3 =
+          __ LoadField(AccessBuilder::ForMapBitField3(), value_map);
+      Node* if_not_deprecated = __ WordEqual(
+          __ Word32And(bitfield3,
+                       __ Int32Constant(Map::IsDeprecatedBit::kMask)),
+          __ Int32Constant(0));
+      __ DeoptimizeIf(DeoptimizeReason::kWrongMap, p.feedback(),
+                      if_not_deprecated, frame_state);
+
+      Operator::Properties properties = Operator::kNoDeopt | Operator::kNoThrow;
+      Runtime::FunctionId id = Runtime::kTryMigrateInstance;
+      auto call_descriptor = Linkage::GetRuntimeCallDescriptor(
+          graph()->zone(), id, 1, properties, CallDescriptor::kNoFlags);
+      Node* result = __ Call(call_descriptor, __ CEntryStubConstant(1), value,
+                             __ ExternalConstant(ExternalReference::Create(id)),
+                             __ Int32Constant(1), __ NoContextConstant());
+      Node* check = ObjectIsSmi(result);
+      __ DeoptimizeIf(DeoptimizeReason::kInstanceMigrationFailed, p.feedback(),
+                      check, frame_state);
+    }
+
+    // Reload the current map of the {value}.
+    value_map = __ LoadField(AccessBuilder::ForMap(), value);
+
+    // Perform the map checks again.
+    for (size_t i = 0; i < map_count; ++i) {
+      Node* map = __ HeapConstant(maps[i]);
+      Node* check = __ WordEqual(value_map, map);
+      if (i == map_count - 1) {
+        __ DeoptimizeIfNot(DeoptimizeReason::kWrongMap, p.feedback(), check,
+                           frame_state);
+      } else {
+        __ GotoIf(check, &done);
+      }
+    }
+
+    __ Goto(&done);
+    __ Bind(&done);
+  } else {
+    auto done = __ MakeLabel();
+
+    // Load the current map of the {value}.
+    Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+
+    for (size_t i = 0; i < map_count; ++i) {
+      Node* map = __ HeapConstant(maps[i]);
+      Node* check = __ WordEqual(value_map, map);
+      if (i == map_count - 1) {
+        __ DeoptimizeIfNot(DeoptimizeReason::kWrongMap, p.feedback(), check,
+                           frame_state);
+      } else {
+        __ GotoIf(check, &done);
+      }
+    }
+    __ Goto(&done);
+    __ Bind(&done);
+  }
+}
+
+Node* EffectControlLinearizer::LowerCompareMaps(Node* node) {
+  ZoneHandleSet<Map> const& maps = CompareMapsParametersOf(node->op()).maps();
+  size_t const map_count = maps.size();
+  Node* value = node->InputAt(0);
+
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
+
+  // Load the current map of the {value}.
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+
+  for (size_t i = 0; i < map_count; ++i) {
+    Node* map = __ HeapConstant(maps[i]);
+    Node* check = __ WordEqual(value_map, map);
+    __ GotoIf(check, &done, __ Int32Constant(1));
+  }
+  __ Goto(&done, __ Int32Constant(0));
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerCheckNumber(Node* node, Node* frame_state) {
+  Node* value = node->InputAt(0);
+  const CheckParameters& params = CheckParametersOf(node->op());
+
+  auto if_not_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel();
 
   Node* check0 = ObjectIsSmi(value);
-  control = effect =
-      graph()->NewNode(common()->DeoptimizeIf(DeoptimizeReason::kSmi), check0,
-                       frame_state, effect, control);
+  __ GotoIfNot(check0, &if_not_smi);
+  __ Goto(&done);
 
-  Node* value_map = effect = graph()->NewNode(
-      simplified()->LoadField(AccessBuilder::ForMap()), value, effect, control);
-  Node* value_instance_type = effect = graph()->NewNode(
-      simplified()->LoadField(AccessBuilder::ForMapInstanceType()), value_map,
-      effect, control);
+  __ Bind(&if_not_smi);
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* check1 = __ WordEqual(value_map, __ HeapNumberMapConstant());
+  __ DeoptimizeIfNot(DeoptimizeReason::kNotAHeapNumber, params.feedback(),
+                     check1, frame_state);
+  __ Goto(&done);
 
-  Node* check1 =
-      graph()->NewNode(machine()->Uint32LessThan(), value_instance_type,
-                       jsgraph()->Uint32Constant(FIRST_NONSTRING_TYPE));
-  control = effect = graph()->NewNode(
-      common()->DeoptimizeUnless(DeoptimizeReason::kWrongInstanceType), check1,
-      frame_state, effect, control);
-
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&done);
+  return value;
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckIf(Node* node, Node* frame_state,
-                                      Node* effect, Node* control) {
+Node* EffectControlLinearizer::LowerCheckReceiver(Node* node,
+                                                  Node* frame_state) {
   Node* value = node->InputAt(0);
 
-  control = effect =
-      graph()->NewNode(common()->DeoptimizeUnless(DeoptimizeReason::kNoReason),
-                       value, frame_state, effect, control);
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* value_instance_type =
+      __ LoadField(AccessBuilder::ForMapInstanceType(), value_map);
 
-  return ValueEffectControl(value, effect, control);
+  STATIC_ASSERT(LAST_TYPE == LAST_JS_RECEIVER_TYPE);
+  Node* check = __ Uint32LessThanOrEqual(
+      __ Uint32Constant(FIRST_JS_RECEIVER_TYPE), value_instance_type);
+  __ DeoptimizeIfNot(DeoptimizeReason::kNotAJavaScriptObject, VectorSlotPair(),
+                     check, frame_state);
+  return value;
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckTaggedPointer(Node* node, Node* frame_state,
-                                                 Node* effect, Node* control) {
+Node* EffectControlLinearizer::LowerCheckSymbol(Node* node, Node* frame_state) {
   Node* value = node->InputAt(0);
 
-  Node* check = ObjectIsSmi(value);
-  control = effect =
-      graph()->NewNode(common()->DeoptimizeIf(DeoptimizeReason::kSmi), check,
-                       frame_state, effect, control);
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
 
-  return ValueEffectControl(value, effect, control);
+  Node* check =
+      __ WordEqual(value_map, __ HeapConstant(factory()->symbol_map()));
+  __ DeoptimizeIfNot(DeoptimizeReason::kNotASymbol, VectorSlotPair(), check,
+                     frame_state);
+  return value;
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckTaggedSigned(Node* node, Node* frame_state,
-                                                Node* effect, Node* control) {
+Node* EffectControlLinearizer::LowerCheckString(Node* node, Node* frame_state) {
+  Node* value = node->InputAt(0);
+  const CheckParameters& params = CheckParametersOf(node->op());
+
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* value_instance_type =
+      __ LoadField(AccessBuilder::ForMapInstanceType(), value_map);
+
+  Node* check = __ Uint32LessThan(value_instance_type,
+                                  __ Uint32Constant(FIRST_NONSTRING_TYPE));
+  __ DeoptimizeIfNot(DeoptimizeReason::kNotAString, params.feedback(), check,
+                     frame_state);
+  return value;
+}
+
+Node* EffectControlLinearizer::LowerCheckInternalizedString(Node* node,
+                                                            Node* frame_state) {
   Node* value = node->InputAt(0);
 
-  Node* check = ObjectIsSmi(value);
-  control = effect =
-      graph()->NewNode(common()->DeoptimizeUnless(DeoptimizeReason::kNotASmi),
-                       check, frame_state, effect, control);
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* value_instance_type =
+      __ LoadField(AccessBuilder::ForMapInstanceType(), value_map);
 
-  return ValueEffectControl(value, effect, control);
+  Node* check = __ Word32Equal(
+      __ Word32And(value_instance_type,
+                   __ Int32Constant(kIsNotStringMask | kIsNotInternalizedMask)),
+      __ Int32Constant(kInternalizedTag));
+  __ DeoptimizeIfNot(DeoptimizeReason::kWrongInstanceType, VectorSlotPair(),
+                     check, frame_state);
+
+  return value;
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckedInt32Add(Node* node, Node* frame_state,
-                                              Node* effect, Node* control) {
+void EffectControlLinearizer::LowerCheckIf(Node* node, Node* frame_state) {
+  Node* value = node->InputAt(0);
+  const CheckIfParameters& p = CheckIfParametersOf(node->op());
+  __ DeoptimizeIfNot(p.reason(), p.feedback(), value, frame_state);
+}
+
+Node* EffectControlLinearizer::LowerCheckedInt32Add(Node* node,
+                                                    Node* frame_state) {
   Node* lhs = node->InputAt(0);
   Node* rhs = node->InputAt(1);
 
-  Node* value =
-      graph()->NewNode(machine()->Int32AddWithOverflow(), lhs, rhs, control);
-
-  Node* check = graph()->NewNode(common()->Projection(1), value, control);
-  control = effect =
-      graph()->NewNode(common()->DeoptimizeIf(DeoptimizeReason::kOverflow),
-                       check, frame_state, effect, control);
-
-  value = graph()->NewNode(common()->Projection(0), value, control);
-
-  return ValueEffectControl(value, effect, control);
+  Node* value = __ Int32AddWithOverflow(lhs, rhs);
+  Node* check = __ Projection(1, value);
+  __ DeoptimizeIf(DeoptimizeReason::kOverflow, VectorSlotPair(), check,
+                  frame_state);
+  return __ Projection(0, value);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckedInt32Sub(Node* node, Node* frame_state,
-                                              Node* effect, Node* control) {
+Node* EffectControlLinearizer::LowerCheckedInt32Sub(Node* node,
+                                                    Node* frame_state) {
   Node* lhs = node->InputAt(0);
   Node* rhs = node->InputAt(1);
 
-  Node* value =
-      graph()->NewNode(machine()->Int32SubWithOverflow(), lhs, rhs, control);
-
-  Node* check = graph()->NewNode(common()->Projection(1), value, control);
-  control = effect =
-      graph()->NewNode(common()->DeoptimizeIf(DeoptimizeReason::kOverflow),
-                       check, frame_state, effect, control);
-
-  value = graph()->NewNode(common()->Projection(0), value, control);
-
-  return ValueEffectControl(value, effect, control);
+  Node* value = __ Int32SubWithOverflow(lhs, rhs);
+  Node* check = __ Projection(1, value);
+  __ DeoptimizeIf(DeoptimizeReason::kOverflow, VectorSlotPair(), check,
+                  frame_state);
+  return __ Projection(0, value);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckedInt32Div(Node* node, Node* frame_state,
-                                              Node* effect, Node* control) {
-  Node* zero = jsgraph()->Int32Constant(0);
-  Node* minusone = jsgraph()->Int32Constant(-1);
-  Node* minint = jsgraph()->Int32Constant(std::numeric_limits<int32_t>::min());
-
+Node* EffectControlLinearizer::LowerCheckedInt32Div(Node* node,
+                                                    Node* frame_state) {
   Node* lhs = node->InputAt(0);
   Node* rhs = node->InputAt(1);
+
+  auto if_not_positive = __ MakeDeferredLabel();
+  auto if_is_minint = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kWord32);
+  auto minint_check_done = __ MakeLabel();
+
+  Node* zero = __ Int32Constant(0);
 
   // Check if {rhs} is positive (and not zero).
-  Node* check0 = graph()->NewNode(machine()->Int32LessThan(), zero, rhs);
-  Node* branch0 =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check0, control);
+  Node* check0 = __ Int32LessThan(zero, rhs);
+  __ GotoIfNot(check0, &if_not_positive);
 
-  Node* if_true0 = graph()->NewNode(common()->IfTrue(), branch0);
-  Node* etrue0 = effect;
-  Node* vtrue0;
-  {
-    // Fast case, no additional checking required.
-    vtrue0 = graph()->NewNode(machine()->Int32Div(), lhs, rhs, if_true0);
-  }
+  // Fast case, no additional checking required.
+  __ Goto(&done, __ Int32Div(lhs, rhs));
 
-  Node* if_false0 = graph()->NewNode(common()->IfFalse(), branch0);
-  Node* efalse0 = effect;
-  Node* vfalse0;
   {
+    __ Bind(&if_not_positive);
+
     // Check if {rhs} is zero.
-    Node* check = graph()->NewNode(machine()->Word32Equal(), rhs, zero);
-    if_false0 = efalse0 = graph()->NewNode(
-        common()->DeoptimizeIf(DeoptimizeReason::kDivisionByZero), check,
-        frame_state, efalse0, if_false0);
+    Node* check = __ Word32Equal(rhs, zero);
+    __ DeoptimizeIf(DeoptimizeReason::kDivisionByZero, VectorSlotPair(), check,
+                    frame_state);
 
     // Check if {lhs} is zero, as that would produce minus zero.
-    check = graph()->NewNode(machine()->Word32Equal(), lhs, zero);
-    if_false0 = efalse0 =
-        graph()->NewNode(common()->DeoptimizeIf(DeoptimizeReason::kMinusZero),
-                         check, frame_state, efalse0, if_false0);
+    check = __ Word32Equal(lhs, zero);
+    __ DeoptimizeIf(DeoptimizeReason::kMinusZero, VectorSlotPair(), check,
+                    frame_state);
 
     // Check if {lhs} is kMinInt and {rhs} is -1, in which case we'd have
     // to return -kMinInt, which is not representable.
+    Node* minint = __ Int32Constant(std::numeric_limits<int32_t>::min());
     Node* check1 = graph()->NewNode(machine()->Word32Equal(), lhs, minint);
-    Node* branch1 = graph()->NewNode(common()->Branch(BranchHint::kFalse),
-                                     check1, if_false0);
+    __ GotoIf(check1, &if_is_minint);
+    __ Goto(&minint_check_done);
 
-    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-    Node* etrue1 = efalse0;
-    {
-      // Check if {rhs} is -1.
-      Node* check = graph()->NewNode(machine()->Word32Equal(), rhs, minusone);
-      if_true1 = etrue1 =
-          graph()->NewNode(common()->DeoptimizeIf(DeoptimizeReason::kOverflow),
-                           check, frame_state, etrue1, if_true1);
-    }
+    __ Bind(&if_is_minint);
+    // Check if {rhs} is -1.
+    Node* minusone = __ Int32Constant(-1);
+    Node* is_minus_one = __ Word32Equal(rhs, minusone);
+    __ DeoptimizeIf(DeoptimizeReason::kOverflow, VectorSlotPair(), is_minus_one,
+                    frame_state);
+    __ Goto(&minint_check_done);
 
-    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-    Node* efalse1 = efalse0;
-
-    if_false0 = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
-    efalse0 =
-        graph()->NewNode(common()->EffectPhi(2), etrue1, efalse1, if_false0);
-
+    __ Bind(&minint_check_done);
     // Perform the actual integer division.
-    vfalse0 = graph()->NewNode(machine()->Int32Div(), lhs, rhs, if_false0);
+    __ Goto(&done, __ Int32Div(lhs, rhs));
   }
 
-  control = graph()->NewNode(common()->Merge(2), if_true0, if_false0);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue0, efalse0, control);
-  Node* value =
-      graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 2), vtrue0,
-                       vfalse0, control);
+  __ Bind(&done);
+  Node* value = done.PhiAt(0);
 
   // Check if the remainder is non-zero.
-  Node* check =
-      graph()->NewNode(machine()->Word32Equal(), lhs,
-                       graph()->NewNode(machine()->Int32Mul(), rhs, value));
-  control = effect = graph()->NewNode(
-      common()->DeoptimizeUnless(DeoptimizeReason::kLostPrecision), check,
-      frame_state, effect, control);
+  Node* check = __ Word32Equal(lhs, __ Int32Mul(rhs, value));
+  __ DeoptimizeIfNot(DeoptimizeReason::kLostPrecision, VectorSlotPair(), check,
+                     frame_state);
 
-  return ValueEffectControl(value, effect, control);
+  return value;
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckedInt32Mod(Node* node, Node* frame_state,
-                                              Node* effect, Node* control) {
-  Node* zero = jsgraph()->Int32Constant(0);
-  Node* one = jsgraph()->Int32Constant(1);
+Node* EffectControlLinearizer::BuildUint32Mod(Node* lhs, Node* rhs) {
+  auto if_rhs_power_of_two = __ MakeLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kWord32);
 
+  // Compute the mask for the {rhs}.
+  Node* one = __ Int32Constant(1);
+  Node* msk = __ Int32Sub(rhs, one);
+
+  // Check if the {rhs} is a power of two.
+  __ GotoIf(__ Word32Equal(__ Word32And(rhs, msk), __ Int32Constant(0)),
+            &if_rhs_power_of_two);
+  {
+    // The {rhs} is not a power of two, do a generic Uint32Mod.
+    __ Goto(&done, __ Uint32Mod(lhs, rhs));
+  }
+
+  __ Bind(&if_rhs_power_of_two);
+  {
+    // The {rhs} is a power of two, just do a fast bit masking.
+    __ Goto(&done, __ Word32And(lhs, msk));
+  }
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerCheckedInt32Mod(Node* node,
+                                                    Node* frame_state) {
   // General case for signed integer modulus, with optimization for (unknown)
   // power of 2 right hand side.
   //
   //   if rhs <= 0 then
   //     rhs = -rhs
   //     deopt if rhs == 0
+  //   let msk = rhs - 1 in
   //   if lhs < 0 then
-  //     let res = lhs % rhs in
-  //     deopt if res == 0
-  //     res
+  //     let lhs_abs = -lsh in
+  //     let res = if rhs & msk == 0 then
+  //                 lhs_abs & msk
+  //               else
+  //                 lhs_abs % rhs in
+  //     if lhs < 0 then
+  //       deopt if res == 0
+  //       -res
+  //     else
+  //       res
   //   else
-  //     let msk = rhs - 1 in
   //     if rhs & msk == 0 then
   //       lhs & msk
   //     else
@@ -1336,1506 +1686,2238 @@ EffectControlLinearizer::LowerCheckedInt32Mod(Node* node, Node* frame_state,
   Node* lhs = node->InputAt(0);
   Node* rhs = node->InputAt(1);
 
-  // Check if {rhs} is not strictly positive.
-  Node* check0 = graph()->NewNode(machine()->Int32LessThanOrEqual(), rhs, zero);
-  Node* branch0 =
-      graph()->NewNode(common()->Branch(BranchHint::kFalse), check0, control);
+  auto if_rhs_not_positive = __ MakeDeferredLabel();
+  auto if_lhs_negative = __ MakeDeferredLabel();
+  auto if_rhs_power_of_two = __ MakeLabel();
+  auto rhs_checked = __ MakeLabel(MachineRepresentation::kWord32);
+  auto done = __ MakeLabel(MachineRepresentation::kWord32);
 
-  Node* if_true0 = graph()->NewNode(common()->IfTrue(), branch0);
-  Node* etrue0 = effect;
-  Node* vtrue0;
+  Node* zero = __ Int32Constant(0);
+
+  // Check if {rhs} is not strictly positive.
+  Node* check0 = __ Int32LessThanOrEqual(rhs, zero);
+  __ GotoIf(check0, &if_rhs_not_positive);
+  __ Goto(&rhs_checked, rhs);
+
+  __ Bind(&if_rhs_not_positive);
   {
     // Negate {rhs}, might still produce a negative result in case of
     // -2^31, but that is handled safely below.
-    vtrue0 = graph()->NewNode(machine()->Int32Sub(), zero, rhs);
+    Node* vtrue0 = __ Int32Sub(zero, rhs);
 
     // Ensure that {rhs} is not zero, otherwise we'd have to return NaN.
-    Node* check = graph()->NewNode(machine()->Word32Equal(), vtrue0, zero);
-    if_true0 = etrue0 = graph()->NewNode(
-        common()->DeoptimizeIf(DeoptimizeReason::kDivisionByZero), check,
-        frame_state, etrue0, if_true0);
+    __ DeoptimizeIf(DeoptimizeReason::kDivisionByZero, VectorSlotPair(),
+                    __ Word32Equal(vtrue0, zero), frame_state);
+    __ Goto(&rhs_checked, vtrue0);
   }
 
-  Node* if_false0 = graph()->NewNode(common()->IfFalse(), branch0);
-  Node* efalse0 = effect;
-  Node* vfalse0 = rhs;
+  __ Bind(&rhs_checked);
+  rhs = rhs_checked.PhiAt(0);
 
-  // At this point {rhs} is either greater than zero or -2^31, both are
-  // fine for the code that follows.
-  control = graph()->NewNode(common()->Merge(2), if_true0, if_false0);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue0, efalse0, control);
-  rhs = graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 2),
-                         vtrue0, vfalse0, control);
-
-  // Check if {lhs} is negative.
-  Node* check1 = graph()->NewNode(machine()->Int32LessThan(), lhs, zero);
-  Node* branch1 =
-      graph()->NewNode(common()->Branch(BranchHint::kFalse), check1, control);
-
-  Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-  Node* etrue1 = effect;
-  Node* vtrue1;
+  __ GotoIf(__ Int32LessThan(lhs, zero), &if_lhs_negative);
   {
-    // Compute the remainder using {lhs % msk}.
-    vtrue1 = graph()->NewNode(machine()->Int32Mod(), lhs, rhs, if_true1);
+    // The {lhs} is a non-negative integer.
+    __ Goto(&done, BuildUint32Mod(lhs, rhs));
+  }
+
+  __ Bind(&if_lhs_negative);
+  {
+    // The {lhs} is a negative integer.
+    Node* res = BuildUint32Mod(__ Int32Sub(zero, lhs), rhs);
 
     // Check if we would have to return -0.
-    Node* check = graph()->NewNode(machine()->Word32Equal(), vtrue1, zero);
-    if_true1 = etrue1 =
-        graph()->NewNode(common()->DeoptimizeIf(DeoptimizeReason::kMinusZero),
-                         check, frame_state, etrue1, if_true1);
+    __ DeoptimizeIf(DeoptimizeReason::kMinusZero, VectorSlotPair(),
+                    __ Word32Equal(res, zero), frame_state);
+    __ Goto(&done, __ Int32Sub(zero, res));
   }
 
-  Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-  Node* efalse1 = effect;
-  Node* vfalse1;
-  {
-    Node* msk = graph()->NewNode(machine()->Int32Sub(), rhs, one);
-
-    // Check if {rhs} minus one is a valid mask.
-    Node* check2 = graph()->NewNode(
-        machine()->Word32Equal(),
-        graph()->NewNode(machine()->Word32And(), rhs, msk), zero);
-    Node* branch2 = graph()->NewNode(common()->Branch(), check2, if_false1);
-
-    // Compute the remainder using {lhs & msk}.
-    Node* if_true2 = graph()->NewNode(common()->IfTrue(), branch2);
-    Node* vtrue2 = graph()->NewNode(machine()->Word32And(), lhs, msk);
-
-    // Compute the remainder using the generic {lhs % rhs}.
-    Node* if_false2 = graph()->NewNode(common()->IfFalse(), branch2);
-    Node* vfalse2 =
-        graph()->NewNode(machine()->Int32Mod(), lhs, rhs, if_false2);
-
-    if_false1 = graph()->NewNode(common()->Merge(2), if_true2, if_false2);
-    vfalse1 = graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 2),
-                               vtrue2, vfalse2, if_false1);
-  }
-
-  control = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue1, efalse1, control);
-  Node* value =
-      graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 2), vtrue1,
-                       vfalse1, control);
-
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckedUint32Div(Node* node, Node* frame_state,
-                                               Node* effect, Node* control) {
-  Node* zero = jsgraph()->Int32Constant(0);
-
+Node* EffectControlLinearizer::LowerCheckedUint32Div(Node* node,
+                                                     Node* frame_state) {
   Node* lhs = node->InputAt(0);
   Node* rhs = node->InputAt(1);
 
+  Node* zero = __ Int32Constant(0);
+
   // Ensure that {rhs} is not zero, otherwise we'd have to return NaN.
-  Node* check = graph()->NewNode(machine()->Word32Equal(), rhs, zero);
-  control = effect = graph()->NewNode(
-      common()->DeoptimizeIf(DeoptimizeReason::kDivisionByZero), check,
-      frame_state, effect, control);
+  Node* check = __ Word32Equal(rhs, zero);
+  __ DeoptimizeIf(DeoptimizeReason::kDivisionByZero, VectorSlotPair(), check,
+                  frame_state);
 
   // Perform the actual unsigned integer division.
-  Node* value = graph()->NewNode(machine()->Uint32Div(), lhs, rhs, control);
+  Node* value = __ Uint32Div(lhs, rhs);
 
   // Check if the remainder is non-zero.
-  check = graph()->NewNode(machine()->Word32Equal(), lhs,
-                           graph()->NewNode(machine()->Int32Mul(), rhs, value));
-  control = effect = graph()->NewNode(
-      common()->DeoptimizeUnless(DeoptimizeReason::kLostPrecision), check,
-      frame_state, effect, control);
-
-  return ValueEffectControl(value, effect, control);
+  check = __ Word32Equal(lhs, __ Int32Mul(rhs, value));
+  __ DeoptimizeIfNot(DeoptimizeReason::kLostPrecision, VectorSlotPair(), check,
+                     frame_state);
+  return value;
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckedUint32Mod(Node* node, Node* frame_state,
-                                               Node* effect, Node* control) {
-  Node* zero = jsgraph()->Int32Constant(0);
-
+Node* EffectControlLinearizer::LowerCheckedUint32Mod(Node* node,
+                                                     Node* frame_state) {
   Node* lhs = node->InputAt(0);
   Node* rhs = node->InputAt(1);
+
+  Node* zero = __ Int32Constant(0);
 
   // Ensure that {rhs} is not zero, otherwise we'd have to return NaN.
-  Node* check = graph()->NewNode(machine()->Word32Equal(), rhs, zero);
-  control = effect = graph()->NewNode(
-      common()->DeoptimizeIf(DeoptimizeReason::kDivisionByZero), check,
-      frame_state, effect, control);
+  Node* check = __ Word32Equal(rhs, zero);
+  __ DeoptimizeIf(DeoptimizeReason::kDivisionByZero, VectorSlotPair(), check,
+                  frame_state);
 
   // Perform the actual unsigned integer modulus.
-  Node* value = graph()->NewNode(machine()->Uint32Mod(), lhs, rhs, control);
-
-  return ValueEffectControl(value, effect, control);
+  return BuildUint32Mod(lhs, rhs);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckedInt32Mul(Node* node, Node* frame_state,
-                                              Node* effect, Node* control) {
+Node* EffectControlLinearizer::LowerCheckedInt32Mul(Node* node,
+                                                    Node* frame_state) {
   CheckForMinusZeroMode mode = CheckMinusZeroModeOf(node->op());
-  Node* zero = jsgraph()->Int32Constant(0);
   Node* lhs = node->InputAt(0);
   Node* rhs = node->InputAt(1);
 
-  Node* projection =
-      graph()->NewNode(machine()->Int32MulWithOverflow(), lhs, rhs, control);
+  Node* projection = __ Int32MulWithOverflow(lhs, rhs);
+  Node* check = __ Projection(1, projection);
+  __ DeoptimizeIf(DeoptimizeReason::kOverflow, VectorSlotPair(), check,
+                  frame_state);
 
-  Node* check = graph()->NewNode(common()->Projection(1), projection, control);
-  control = effect =
-      graph()->NewNode(common()->DeoptimizeIf(DeoptimizeReason::kOverflow),
-                       check, frame_state, effect, control);
-
-  Node* value = graph()->NewNode(common()->Projection(0), projection, control);
+  Node* value = __ Projection(0, projection);
 
   if (mode == CheckForMinusZeroMode::kCheckForMinusZero) {
-    Node* check_zero = graph()->NewNode(machine()->Word32Equal(), value, zero);
-    Node* branch_zero = graph()->NewNode(common()->Branch(BranchHint::kFalse),
-                                         check_zero, control);
+    auto if_zero = __ MakeDeferredLabel();
+    auto check_done = __ MakeLabel();
+    Node* zero = __ Int32Constant(0);
+    Node* check_zero = __ Word32Equal(value, zero);
+    __ GotoIf(check_zero, &if_zero);
+    __ Goto(&check_done);
 
-    Node* if_zero = graph()->NewNode(common()->IfTrue(), branch_zero);
-    Node* e_if_zero = effect;
-    {
-      // We may need to return negative zero.
-      Node* or_inputs = graph()->NewNode(machine()->Word32Or(), lhs, rhs);
-      Node* check_or =
-          graph()->NewNode(machine()->Int32LessThan(), or_inputs, zero);
-      if_zero = e_if_zero =
-          graph()->NewNode(common()->DeoptimizeIf(DeoptimizeReason::kMinusZero),
-                           check_or, frame_state, e_if_zero, if_zero);
-    }
+    __ Bind(&if_zero);
+    // We may need to return negative zero.
+    Node* check_or = __ Int32LessThan(__ Word32Or(lhs, rhs), zero);
+    __ DeoptimizeIf(DeoptimizeReason::kMinusZero, VectorSlotPair(), check_or,
+                    frame_state);
+    __ Goto(&check_done);
 
-    Node* if_not_zero = graph()->NewNode(common()->IfFalse(), branch_zero);
-    Node* e_if_not_zero = effect;
-
-    control = graph()->NewNode(common()->Merge(2), if_zero, if_not_zero);
-    effect = graph()->NewNode(common()->EffectPhi(2), e_if_zero, e_if_not_zero,
-                              control);
+    __ Bind(&check_done);
   }
 
-  return ValueEffectControl(value, effect, control);
+  return value;
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckedUint32ToInt32(Node* node,
-                                                   Node* frame_state,
-                                                   Node* effect,
-                                                   Node* control) {
+Node* EffectControlLinearizer::LowerCheckedInt32ToTaggedSigned(
+    Node* node, Node* frame_state) {
+  DCHECK(SmiValuesAre31Bits());
   Node* value = node->InputAt(0);
-  Node* max_int = jsgraph()->Int32Constant(std::numeric_limits<int32_t>::max());
-  Node* is_safe =
-      graph()->NewNode(machine()->Uint32LessThanOrEqual(), value, max_int);
-  control = effect = graph()->NewNode(
-      common()->DeoptimizeUnless(DeoptimizeReason::kLostPrecision), is_safe,
-      frame_state, effect, control);
+  const CheckParameters& params = CheckParametersOf(node->op());
 
-  return ValueEffectControl(value, effect, control);
+  Node* add = __ Int32AddWithOverflow(value, value);
+  Node* check = __ Projection(1, add);
+  __ DeoptimizeIf(DeoptimizeReason::kOverflow, params.feedback(), check,
+                  frame_state);
+  Node* result = __ Projection(0, add);
+  result = ChangeInt32ToIntPtr(result);
+  return result;
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::BuildCheckedFloat64ToInt32(CheckForMinusZeroMode mode,
-                                                    Node* value,
-                                                    Node* frame_state,
-                                                    Node* effect,
-                                                    Node* control) {
-  Node* value32 = graph()->NewNode(machine()->RoundFloat64ToInt32(), value);
-  Node* check_same = graph()->NewNode(
-      machine()->Float64Equal(), value,
-      graph()->NewNode(machine()->ChangeInt32ToFloat64(), value32));
-  control = effect = graph()->NewNode(
-      common()->DeoptimizeUnless(DeoptimizeReason::kLostPrecisionOrNaN),
-      check_same, frame_state, effect, control);
+Node* EffectControlLinearizer::LowerCheckedUint32ToInt32(Node* node,
+                                                         Node* frame_state) {
+  Node* value = node->InputAt(0);
+  const CheckParameters& params = CheckParametersOf(node->op());
+  Node* unsafe = __ Int32LessThan(value, __ Int32Constant(0));
+  __ DeoptimizeIf(DeoptimizeReason::kLostPrecision, params.feedback(), unsafe,
+                  frame_state);
+  return value;
+}
+
+Node* EffectControlLinearizer::LowerCheckedUint32ToTaggedSigned(
+    Node* node, Node* frame_state) {
+  Node* value = node->InputAt(0);
+  const CheckParameters& params = CheckParametersOf(node->op());
+  Node* check = __ Uint32LessThanOrEqual(value, SmiMaxValueConstant());
+  __ DeoptimizeIfNot(DeoptimizeReason::kLostPrecision, params.feedback(), check,
+                     frame_state);
+  return ChangeUint32ToSmi(value);
+}
+
+Node* EffectControlLinearizer::BuildCheckedFloat64ToInt32(
+    CheckForMinusZeroMode mode, const VectorSlotPair& feedback, Node* value,
+    Node* frame_state) {
+  Node* value32 = __ RoundFloat64ToInt32(value);
+  Node* check_same = __ Float64Equal(value, __ ChangeInt32ToFloat64(value32));
+  __ DeoptimizeIfNot(DeoptimizeReason::kLostPrecisionOrNaN, feedback,
+                     check_same, frame_state);
 
   if (mode == CheckForMinusZeroMode::kCheckForMinusZero) {
     // Check if {value} is -0.
-    Node* check_zero = graph()->NewNode(machine()->Word32Equal(), value32,
-                                        jsgraph()->Int32Constant(0));
-    Node* branch_zero = graph()->NewNode(common()->Branch(BranchHint::kFalse),
-                                         check_zero, control);
+    auto if_zero = __ MakeDeferredLabel();
+    auto check_done = __ MakeLabel();
 
-    Node* if_zero = graph()->NewNode(common()->IfTrue(), branch_zero);
-    Node* if_notzero = graph()->NewNode(common()->IfFalse(), branch_zero);
+    Node* check_zero = __ Word32Equal(value32, __ Int32Constant(0));
+    __ GotoIf(check_zero, &if_zero);
+    __ Goto(&check_done);
 
+    __ Bind(&if_zero);
     // In case of 0, we need to check the high bits for the IEEE -0 pattern.
-    Node* check_negative = graph()->NewNode(
-        machine()->Int32LessThan(),
-        graph()->NewNode(machine()->Float64ExtractHighWord32(), value),
-        jsgraph()->Int32Constant(0));
+    Node* check_negative = __ Int32LessThan(__ Float64ExtractHighWord32(value),
+                                            __ Int32Constant(0));
+    __ DeoptimizeIf(DeoptimizeReason::kMinusZero, feedback, check_negative,
+                    frame_state);
+    __ Goto(&check_done);
 
-    Node* deopt_minus_zero =
-        graph()->NewNode(common()->DeoptimizeIf(DeoptimizeReason::kMinusZero),
-                         check_negative, frame_state, effect, if_zero);
-
-    control =
-        graph()->NewNode(common()->Merge(2), deopt_minus_zero, if_notzero);
-    effect = graph()->NewNode(common()->EffectPhi(2), deopt_minus_zero, effect,
-                              control);
+    __ Bind(&check_done);
   }
-
-  return ValueEffectControl(value32, effect, control);
+  return value32;
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckedFloat64ToInt32(Node* node,
-                                                    Node* frame_state,
-                                                    Node* effect,
-                                                    Node* control) {
-  CheckForMinusZeroMode mode = CheckMinusZeroModeOf(node->op());
+Node* EffectControlLinearizer::LowerCheckedFloat64ToInt32(Node* node,
+                                                          Node* frame_state) {
+  const CheckMinusZeroParameters& params =
+      CheckMinusZeroParametersOf(node->op());
   Node* value = node->InputAt(0);
-
-  return BuildCheckedFloat64ToInt32(mode, value, frame_state, effect, control);
+  return BuildCheckedFloat64ToInt32(params.mode(), params.feedback(), value,
+                                    frame_state);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckedTaggedSignedToInt32(Node* node,
-                                                         Node* frame_state,
-                                                         Node* effect,
-                                                         Node* control) {
+Node* EffectControlLinearizer::LowerCheckedTaggedSignedToInt32(
+    Node* node, Node* frame_state) {
   Node* value = node->InputAt(0);
+  const CheckParameters& params = CheckParametersOf(node->op());
+  Node* check = ObjectIsSmi(value);
+  __ DeoptimizeIfNot(DeoptimizeReason::kNotASmi, params.feedback(), check,
+                     frame_state);
+  return ChangeSmiToInt32(value);
+}
+
+Node* EffectControlLinearizer::LowerCheckedTaggedToInt32(Node* node,
+                                                         Node* frame_state) {
+  const CheckMinusZeroParameters& params =
+      CheckMinusZeroParametersOf(node->op());
+  Node* value = node->InputAt(0);
+
+  auto if_not_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kWord32);
 
   Node* check = ObjectIsSmi(value);
-  control = effect =
-      graph()->NewNode(common()->DeoptimizeUnless(DeoptimizeReason::kNotASmi),
-                       check, frame_state, effect, control);
-  value = ChangeSmiToInt32(value);
-
-  return ValueEffectControl(value, effect, control);
-}
-
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckedTaggedToInt32(Node* node,
-                                                   Node* frame_state,
-                                                   Node* effect,
-                                                   Node* control) {
-  CheckForMinusZeroMode mode = CheckMinusZeroModeOf(node->op());
-  Node* value = node->InputAt(0);
-
-  Node* check = ObjectIsSmi(value);
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check, control);
-
+  __ GotoIfNot(check, &if_not_smi);
   // In the Smi case, just convert to int32.
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
-  Node* vtrue = ChangeSmiToInt32(value);
+  __ Goto(&done, ChangeSmiToInt32(value));
 
   // In the non-Smi case, check the heap numberness, load the number and convert
   // to int32.
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* efalse = effect;
-  Node* vfalse;
-  {
-    Node* value_map = efalse =
-        graph()->NewNode(simplified()->LoadField(AccessBuilder::ForMap()),
-                         value, efalse, if_false);
-    Node* check = graph()->NewNode(machine()->WordEqual(), value_map,
-                                   jsgraph()->HeapNumberMapConstant());
-    if_false = efalse = graph()->NewNode(
-        common()->DeoptimizeUnless(DeoptimizeReason::kNotAHeapNumber), check,
-        frame_state, efalse, if_false);
-    vfalse = efalse = graph()->NewNode(
-        simplified()->LoadField(AccessBuilder::ForHeapNumberValue()), value,
-        efalse, if_false);
-    ValueEffectControl state =
-        BuildCheckedFloat64ToInt32(mode, vfalse, frame_state, efalse, if_false);
-    if_false = state.control;
-    efalse = state.effect;
-    vfalse = state.value;
-  }
+  __ Bind(&if_not_smi);
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* check_map = __ WordEqual(value_map, __ HeapNumberMapConstant());
+  __ DeoptimizeIfNot(DeoptimizeReason::kNotAHeapNumber, params.feedback(),
+                     check_map, frame_state);
+  Node* vfalse = __ LoadField(AccessBuilder::ForHeapNumberValue(), value);
+  vfalse = BuildCheckedFloat64ToInt32(params.mode(), params.feedback(), vfalse,
+                                      frame_state);
+  __ Goto(&done, vfalse);
 
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, control);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 2),
-                           vtrue, vfalse, control);
-
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::BuildCheckedHeapNumberOrOddballToFloat64(
-    CheckTaggedInputMode mode, Node* value, Node* frame_state, Node* effect,
-    Node* control) {
-  Node* value_map = effect = graph()->NewNode(
-      simplified()->LoadField(AccessBuilder::ForMap()), value, effect, control);
-
-  Node* check_number = graph()->NewNode(machine()->WordEqual(), value_map,
-                                        jsgraph()->HeapNumberMapConstant());
-
+Node* EffectControlLinearizer::BuildCheckedHeapNumberOrOddballToFloat64(
+    CheckTaggedInputMode mode, const VectorSlotPair& feedback, Node* value,
+    Node* frame_state) {
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* check_number = __ WordEqual(value_map, __ HeapNumberMapConstant());
   switch (mode) {
     case CheckTaggedInputMode::kNumber: {
-      control = effect = graph()->NewNode(
-          common()->DeoptimizeUnless(DeoptimizeReason::kNotAHeapNumber),
-          check_number, frame_state, effect, control);
+      __ DeoptimizeIfNot(DeoptimizeReason::kNotAHeapNumber, feedback,
+                         check_number, frame_state);
       break;
     }
     case CheckTaggedInputMode::kNumberOrOddball: {
-      Node* branch = graph()->NewNode(common()->Branch(BranchHint::kTrue),
-                                      check_number, control);
+      auto check_done = __ MakeLabel();
 
-      Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-      Node* etrue = effect;
-
-      Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
+      __ GotoIf(check_number, &check_done);
       // For oddballs also contain the numeric value, let us just check that
       // we have an oddball here.
-      Node* efalse = effect;
-      Node* instance_type = efalse = graph()->NewNode(
-          simplified()->LoadField(AccessBuilder::ForMapInstanceType()),
-          value_map, efalse, if_false);
+      Node* instance_type =
+          __ LoadField(AccessBuilder::ForMapInstanceType(), value_map);
       Node* check_oddball =
-          graph()->NewNode(machine()->Word32Equal(), instance_type,
-                           jsgraph()->Int32Constant(ODDBALL_TYPE));
-      if_false = efalse = graph()->NewNode(
-          common()->DeoptimizeUnless(
-              DeoptimizeReason::kNotAHeapNumberUndefinedBoolean),
-          check_oddball, frame_state, efalse, if_false);
+          __ Word32Equal(instance_type, __ Int32Constant(ODDBALL_TYPE));
+      __ DeoptimizeIfNot(DeoptimizeReason::kNotANumberOrOddball, feedback,
+                         check_oddball, frame_state);
       STATIC_ASSERT(HeapNumber::kValueOffset == Oddball::kToNumberRawOffset);
+      __ Goto(&check_done);
 
-      control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-      effect = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, control);
+      __ Bind(&check_done);
       break;
     }
   }
-
-  value = effect = graph()->NewNode(
-      simplified()->LoadField(AccessBuilder::ForHeapNumberValue()), value,
-      effect, control);
-  return ValueEffectControl(value, effect, control);
+  return __ LoadField(AccessBuilder::ForHeapNumberValue(), value);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckedTaggedToFloat64(Node* node,
-                                                     Node* frame_state,
-                                                     Node* effect,
-                                                     Node* control) {
-  CheckTaggedInputMode mode = CheckTaggedInputModeOf(node->op());
+Node* EffectControlLinearizer::LowerCheckedTaggedToFloat64(Node* node,
+                                                           Node* frame_state) {
+  CheckTaggedInputParameters const& p =
+      CheckTaggedInputParametersOf(node->op());
   Node* value = node->InputAt(0);
 
+  auto if_smi = __ MakeLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kFloat64);
+
   Node* check = ObjectIsSmi(value);
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check, control);
+  __ GotoIf(check, &if_smi);
 
   // In the Smi case, just convert to int32 and then float64.
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
-  Node* vtrue = ChangeSmiToInt32(value);
-  vtrue = graph()->NewNode(machine()->ChangeInt32ToFloat64(), vtrue);
-
   // Otherwise, check heap numberness and load the number.
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  ValueEffectControl number_state = BuildCheckedHeapNumberOrOddballToFloat64(
-      mode, value, frame_state, effect, if_false);
+  Node* number = BuildCheckedHeapNumberOrOddballToFloat64(
+      p.mode(), p.feedback(), value, frame_state);
+  __ Goto(&done, number);
 
-  Node* merge =
-      graph()->NewNode(common()->Merge(2), if_true, number_state.control);
-  Node* effect_phi = graph()->NewNode(common()->EffectPhi(2), etrue,
-                                      number_state.effect, merge);
-  Node* result =
-      graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2), vtrue,
-                       number_state.value, merge);
+  __ Bind(&if_smi);
+  Node* from_smi = ChangeSmiToInt32(value);
+  from_smi = __ ChangeInt32ToFloat64(from_smi);
+  __ Goto(&done, from_smi);
 
-  return ValueEffectControl(result, effect_phi, merge);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerTruncateTaggedToWord32(Node* node, Node* effect,
-                                                     Node* control) {
+Node* EffectControlLinearizer::LowerCheckedTaggedToTaggedSigned(
+    Node* node, Node* frame_state) {
   Node* value = node->InputAt(0);
+  const CheckParameters& params = CheckParametersOf(node->op());
 
   Node* check = ObjectIsSmi(value);
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check, control);
+  __ DeoptimizeIfNot(DeoptimizeReason::kNotASmi, params.feedback(), check,
+                     frame_state);
 
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
-  Node* vtrue = ChangeSmiToInt32(value);
-
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* efalse = effect;
-  Node* vfalse;
-  {
-    STATIC_ASSERT(HeapNumber::kValueOffset == Oddball::kToNumberRawOffset);
-    vfalse = efalse = graph()->NewNode(
-        simplified()->LoadField(AccessBuilder::ForHeapNumberValue()), value,
-        efalse, if_false);
-    vfalse = graph()->NewNode(machine()->TruncateFloat64ToWord32(), vfalse);
-  }
-
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, control);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 2),
-                           vtrue, vfalse, control);
-
-  return ValueEffectControl(value, effect, control);
+  return value;
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckedTruncateTaggedToWord32(Node* node,
-                                                            Node* frame_state,
-                                                            Node* effect,
-                                                            Node* control) {
+Node* EffectControlLinearizer::LowerCheckedTaggedToTaggedPointer(
+    Node* node, Node* frame_state) {
   Node* value = node->InputAt(0);
+  const CheckParameters& params = CheckParametersOf(node->op());
 
   Node* check = ObjectIsSmi(value);
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check, control);
+  __ DeoptimizeIf(DeoptimizeReason::kSmi, params.feedback(), check,
+                  frame_state);
+  return value;
+}
 
+Node* EffectControlLinearizer::LowerTruncateTaggedToWord32(Node* node) {
+  Node* value = node->InputAt(0);
+
+  auto if_not_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kWord32);
+
+  Node* check = ObjectIsSmi(value);
+  __ GotoIfNot(check, &if_not_smi);
+  __ Goto(&done, ChangeSmiToInt32(value));
+
+  __ Bind(&if_not_smi);
+  STATIC_ASSERT(HeapNumber::kValueOffset == Oddball::kToNumberRawOffset);
+  Node* vfalse = __ LoadField(AccessBuilder::ForHeapNumberValue(), value);
+  vfalse = __ TruncateFloat64ToWord32(vfalse);
+  __ Goto(&done, vfalse);
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerCheckedTruncateTaggedToWord32(
+    Node* node, Node* frame_state) {
+  const CheckTaggedInputParameters& params =
+      CheckTaggedInputParametersOf(node->op());
+  Node* value = node->InputAt(0);
+
+  auto if_not_smi = __ MakeLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kWord32);
+
+  Node* check = ObjectIsSmi(value);
+  __ GotoIfNot(check, &if_not_smi);
   // In the Smi case, just convert to int32.
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
-  Node* vtrue = ChangeSmiToInt32(value);
+  __ Goto(&done, ChangeSmiToInt32(value));
 
   // Otherwise, check that it's a heap number or oddball and truncate the value
   // to int32.
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  ValueEffectControl false_state = BuildCheckedHeapNumberOrOddballToFloat64(
-      CheckTaggedInputMode::kNumberOrOddball, value, frame_state, effect,
-      if_false);
-  false_state.value =
-      graph()->NewNode(machine()->TruncateFloat64ToWord32(), false_state.value);
+  __ Bind(&if_not_smi);
+  Node* number = BuildCheckedHeapNumberOrOddballToFloat64(
+      params.mode(), params.feedback(), value, frame_state);
+  number = __ TruncateFloat64ToWord32(number);
+  __ Goto(&done, number);
 
-  Node* merge =
-      graph()->NewNode(common()->Merge(2), if_true, false_state.control);
-  Node* effect_phi = graph()->NewNode(common()->EffectPhi(2), etrue,
-                                      false_state.effect, merge);
-  Node* result =
-      graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 2), vtrue,
-                       false_state.value, merge);
-
-  return ValueEffectControl(result, effect_phi, merge);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerObjectIsCallable(Node* node, Node* effect,
-                                               Node* control) {
+Node* EffectControlLinearizer::LowerAllocate(Node* node) {
+  Node* size = node->InputAt(0);
+  PretenureFlag pretenure = PretenureFlagOf(node->op());
+  Node* new_node = __ Allocate(pretenure, size);
+  return new_node;
+}
+
+Node* EffectControlLinearizer::LowerNumberToString(Node* node) {
+  Node* argument = node->InputAt(0);
+
+  Callable const callable =
+      Builtins::CallableFor(isolate(), Builtins::kNumberToString);
+  Operator::Properties properties = Operator::kEliminatable;
+  CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(), 0, flags, properties);
+  return __ Call(call_descriptor, __ HeapConstant(callable.code()), argument,
+                 __ NoContextConstant());
+}
+
+Node* EffectControlLinearizer::LowerObjectIsArrayBufferView(Node* node) {
   Node* value = node->InputAt(0);
+
+  auto if_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
 
   Node* check = ObjectIsSmi(value);
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kFalse), check, control);
+  __ GotoIf(check, &if_smi);
 
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
-  Node* vtrue = jsgraph()->Int32Constant(0);
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* value_instance_type =
+      __ LoadField(AccessBuilder::ForMapInstanceType(), value_map);
+  STATIC_ASSERT(JS_TYPED_ARRAY_TYPE + 1 == JS_DATA_VIEW_TYPE);
+  Node* vfalse = __ Uint32LessThan(
+      __ Int32Sub(value_instance_type, __ Int32Constant(JS_TYPED_ARRAY_TYPE)),
+      __ Int32Constant(2));
+  __ Goto(&done, vfalse);
 
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* efalse = effect;
-  Node* vfalse;
-  {
-    Node* value_map = efalse =
-        graph()->NewNode(simplified()->LoadField(AccessBuilder::ForMap()),
-                         value, efalse, if_false);
-    Node* value_bit_field = efalse = graph()->NewNode(
-        simplified()->LoadField(AccessBuilder::ForMapBitField()), value_map,
-        efalse, if_false);
-    vfalse = graph()->NewNode(
-        machine()->Word32Equal(),
-        jsgraph()->Int32Constant(1 << Map::kIsCallable),
-        graph()->NewNode(
-            machine()->Word32And(), value_bit_field,
-            jsgraph()->Int32Constant((1 << Map::kIsCallable) |
-                                     (1 << Map::kIsUndetectable))));
-  }
+  __ Bind(&if_smi);
+  __ Goto(&done, __ Int32Constant(0));
 
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, control);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kBit, 2), vtrue,
-                           vfalse, control);
-
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerObjectIsNumber(Node* node, Node* effect,
-                                             Node* control) {
+Node* EffectControlLinearizer::LowerObjectIsBigInt(Node* node) {
   Node* value = node->InputAt(0);
+
+  auto if_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
 
   Node* check = ObjectIsSmi(value);
-  Node* branch = graph()->NewNode(common()->Branch(), check, control);
+  __ GotoIf(check, &if_smi);
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* value_instance_type =
+      __ LoadField(AccessBuilder::ForMapInstanceType(), value_map);
+  Node* vfalse =
+      __ Word32Equal(value_instance_type, __ Uint32Constant(BIGINT_TYPE));
+  __ Goto(&done, vfalse);
 
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
-  Node* vtrue = jsgraph()->Int32Constant(1);
+  __ Bind(&if_smi);
+  __ Goto(&done, __ Int32Constant(0));
 
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* efalse = effect;
-  Node* vfalse;
-  {
-    Node* value_map = efalse =
-        graph()->NewNode(simplified()->LoadField(AccessBuilder::ForMap()),
-                         value, efalse, if_false);
-    vfalse = graph()->NewNode(machine()->WordEqual(), value_map,
-                              jsgraph()->HeapNumberMapConstant());
-  }
-
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, control);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kBit, 2), vtrue,
-                           vfalse, control);
-
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerObjectIsReceiver(Node* node, Node* effect,
-                                               Node* control) {
+Node* EffectControlLinearizer::LowerObjectIsCallable(Node* node) {
   Node* value = node->InputAt(0);
+
+  auto if_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
 
   Node* check = ObjectIsSmi(value);
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kFalse), check, control);
+  __ GotoIf(check, &if_smi);
 
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
-  Node* vtrue = jsgraph()->Int32Constant(0);
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* value_bit_field =
+      __ LoadField(AccessBuilder::ForMapBitField(), value_map);
+  Node* vfalse =
+      __ Word32Equal(__ Int32Constant(Map::IsCallableBit::kMask),
+                     __ Word32And(value_bit_field,
+                                  __ Int32Constant(Map::IsCallableBit::kMask)));
+  __ Goto(&done, vfalse);
 
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* efalse = effect;
-  Node* vfalse;
-  {
-    STATIC_ASSERT(LAST_TYPE == LAST_JS_RECEIVER_TYPE);
-    Node* value_map = efalse =
-        graph()->NewNode(simplified()->LoadField(AccessBuilder::ForMap()),
-                         value, efalse, if_false);
-    Node* value_instance_type = efalse = graph()->NewNode(
-        simplified()->LoadField(AccessBuilder::ForMapInstanceType()), value_map,
-        efalse, if_false);
-    vfalse = graph()->NewNode(machine()->Uint32LessThanOrEqual(),
-                              jsgraph()->Uint32Constant(FIRST_JS_RECEIVER_TYPE),
-                              value_instance_type);
-  }
+  __ Bind(&if_smi);
+  __ Goto(&done, __ Int32Constant(0));
 
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, control);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kBit, 2), vtrue,
-                           vfalse, control);
-
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerObjectIsSmi(Node* node, Node* effect,
-                                          Node* control) {
+Node* EffectControlLinearizer::LowerObjectIsConstructor(Node* node) {
   Node* value = node->InputAt(0);
-  value = ObjectIsSmi(value);
-  return ValueEffectControl(value, effect, control);
-}
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerObjectIsString(Node* node, Node* effect,
-                                             Node* control) {
-  Node* value = node->InputAt(0);
+  auto if_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
 
   Node* check = ObjectIsSmi(value);
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kFalse), check, control);
+  __ GotoIf(check, &if_smi);
 
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
-  Node* vtrue = jsgraph()->Int32Constant(0);
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* value_bit_field =
+      __ LoadField(AccessBuilder::ForMapBitField(), value_map);
+  Node* vfalse = __ Word32Equal(
+      __ Int32Constant(Map::IsConstructorBit::kMask),
+      __ Word32And(value_bit_field,
+                   __ Int32Constant(Map::IsConstructorBit::kMask)));
+  __ Goto(&done, vfalse);
 
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* efalse = effect;
-  Node* vfalse;
-  {
-    Node* value_map = efalse =
-        graph()->NewNode(simplified()->LoadField(AccessBuilder::ForMap()),
-                         value, efalse, if_false);
-    Node* value_instance_type = efalse = graph()->NewNode(
-        simplified()->LoadField(AccessBuilder::ForMapInstanceType()), value_map,
-        efalse, if_false);
-    vfalse = graph()->NewNode(machine()->Uint32LessThan(), value_instance_type,
-                              jsgraph()->Uint32Constant(FIRST_NONSTRING_TYPE));
-  }
+  __ Bind(&if_smi);
+  __ Goto(&done, __ Int32Constant(0));
 
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, control);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kBit, 2), vtrue,
-                           vfalse, control);
-
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerObjectIsUndetectable(Node* node, Node* effect,
-                                                   Node* control) {
+Node* EffectControlLinearizer::LowerObjectIsDetectableCallable(Node* node) {
   Node* value = node->InputAt(0);
 
+  auto if_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
+
   Node* check = ObjectIsSmi(value);
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kFalse), check, control);
+  __ GotoIf(check, &if_smi);
 
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
-  Node* vtrue = jsgraph()->Int32Constant(0);
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* value_bit_field =
+      __ LoadField(AccessBuilder::ForMapBitField(), value_map);
+  Node* vfalse = __ Word32Equal(
+      __ Int32Constant(Map::IsCallableBit::kMask),
+      __ Word32And(value_bit_field,
+                   __ Int32Constant((Map::IsCallableBit::kMask) |
+                                    (Map::IsUndetectableBit::kMask))));
+  __ Goto(&done, vfalse);
 
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* efalse = effect;
-  Node* vfalse;
-  {
-    Node* value_map = efalse =
-        graph()->NewNode(simplified()->LoadField(AccessBuilder::ForMap()),
-                         value, efalse, if_false);
-    Node* value_bit_field = efalse = graph()->NewNode(
-        simplified()->LoadField(AccessBuilder::ForMapBitField()), value_map,
-        efalse, if_false);
-    vfalse = graph()->NewNode(
-        machine()->Word32Equal(),
-        graph()->NewNode(
-            machine()->Word32Equal(), jsgraph()->Int32Constant(0),
-            graph()->NewNode(
-                machine()->Word32And(), value_bit_field,
-                jsgraph()->Int32Constant(1 << Map::kIsUndetectable))),
-        jsgraph()->Int32Constant(0));
-  }
+  __ Bind(&if_smi);
+  __ Goto(&done, __ Int32Constant(0));
 
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, control);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kBit, 2), vtrue,
-                           vfalse, control);
-
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerStringCharCodeAt(Node* node, Node* effect,
-                                               Node* control) {
-  Node* subject = node->InputAt(0);
-  Node* index = node->InputAt(1);
+Node* EffectControlLinearizer::LowerNumberIsFloat64Hole(Node* node) {
+  Node* value = node->InputAt(0);
+  Node* check = __ Word32Equal(__ Float64ExtractHighWord32(value),
+                               __ Int32Constant(kHoleNanUpper32));
+  return check;
+}
 
-  // We may need to loop several times for ConsString/SlicedString {subject}s.
-  Node* loop =
-      graph()->NewNode(common()->Loop(4), control, control, control, control);
-  Node* lsubject =
-      graph()->NewNode(common()->Phi(MachineRepresentation::kTagged, 4),
-                       subject, subject, subject, subject, loop);
-  Node* lindex =
-      graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 4), index,
-                       index, index, index, loop);
-  Node* leffect = graph()->NewNode(common()->EffectPhi(4), effect, effect,
-                                   effect, effect, loop);
+Node* EffectControlLinearizer::LowerNumberIsFinite(Node* node) {
+  Node* number = node->InputAt(0);
+  Node* diff = __ Float64Sub(number, number);
+  Node* check = __ Float64Equal(diff, diff);
+  return check;
+}
 
-  control = loop;
-  effect = leffect;
+Node* EffectControlLinearizer::LowerObjectIsFiniteNumber(Node* node) {
+  Node* object = node->InputAt(0);
+  Node* zero = __ Int32Constant(0);
+  Node* one = __ Int32Constant(1);
 
-  // Determine the instance type of {lsubject}.
-  Node* lsubject_map = effect =
-      graph()->NewNode(simplified()->LoadField(AccessBuilder::ForMap()),
-                       lsubject, effect, control);
-  Node* lsubject_instance_type = effect = graph()->NewNode(
-      simplified()->LoadField(AccessBuilder::ForMapInstanceType()),
-      lsubject_map, effect, control);
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
 
-  // Check if {lsubject} is a SeqString.
-  Node* check0 = graph()->NewNode(
-      machine()->Word32Equal(),
-      graph()->NewNode(machine()->Word32And(), lsubject_instance_type,
-                       jsgraph()->Int32Constant(kStringRepresentationMask)),
-      jsgraph()->Int32Constant(kSeqStringTag));
-  Node* branch0 = graph()->NewNode(common()->Branch(), check0, control);
+  // Check if {object} is a Smi.
+  __ GotoIf(ObjectIsSmi(object), &done, one);
 
-  Node* if_true0 = graph()->NewNode(common()->IfTrue(), branch0);
-  Node* etrue0 = effect;
-  Node* vtrue0;
+  // Check if {object} is a HeapNumber.
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), object);
+  __ GotoIfNot(__ WordEqual(value_map, __ HeapNumberMapConstant()), &done,
+               zero);
+
+  // {object} is a HeapNumber.
+  Node* value = __ LoadField(AccessBuilder::ForHeapNumberValue(), object);
+  Node* diff = __ Float64Sub(value, value);
+  Node* check = __ Float64Equal(diff, diff);
+  __ Goto(&done, check);
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerNumberIsInteger(Node* node) {
+  Node* number = node->InputAt(0);
+  Node* trunc = BuildFloat64RoundTruncate(number);
+  Node* diff = __ Float64Sub(number, trunc);
+  Node* check = __ Float64Equal(diff, __ Float64Constant(0));
+  return check;
+}
+
+Node* EffectControlLinearizer::LowerObjectIsInteger(Node* node) {
+  Node* object = node->InputAt(0);
+  Node* zero = __ Int32Constant(0);
+  Node* one = __ Int32Constant(1);
+
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
+
+  // Check if {object} is a Smi.
+  __ GotoIf(ObjectIsSmi(object), &done, one);
+
+  // Check if {object} is a HeapNumber.
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), object);
+  __ GotoIfNot(__ WordEqual(value_map, __ HeapNumberMapConstant()), &done,
+               zero);
+
+  // {object} is a HeapNumber.
+  Node* value = __ LoadField(AccessBuilder::ForHeapNumberValue(), object);
+  Node* trunc = BuildFloat64RoundTruncate(value);
+  Node* diff = __ Float64Sub(value, trunc);
+  Node* check = __ Float64Equal(diff, __ Float64Constant(0));
+  __ Goto(&done, check);
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerNumberIsSafeInteger(Node* node) {
+  Node* number = node->InputAt(0);
+  Node* zero = __ Int32Constant(0);
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
+
+  Node* trunc = BuildFloat64RoundTruncate(number);
+  Node* diff = __ Float64Sub(number, trunc);
+  Node* check = __ Float64Equal(diff, __ Float64Constant(0));
+  __ GotoIfNot(check, &done, zero);
+  Node* in_range = __ Float64LessThanOrEqual(
+      __ Float64Abs(trunc), __ Float64Constant(kMaxSafeInteger));
+  __ Goto(&done, in_range);
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerObjectIsSafeInteger(Node* node) {
+  Node* object = node->InputAt(0);
+  Node* zero = __ Int32Constant(0);
+  Node* one = __ Int32Constant(1);
+
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
+
+  // Check if {object} is a Smi.
+  __ GotoIf(ObjectIsSmi(object), &done, one);
+
+  // Check if {object} is a HeapNumber.
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), object);
+  __ GotoIfNot(__ WordEqual(value_map, __ HeapNumberMapConstant()), &done,
+               zero);
+
+  // {object} is a HeapNumber.
+  Node* value = __ LoadField(AccessBuilder::ForHeapNumberValue(), object);
+  Node* trunc = BuildFloat64RoundTruncate(value);
+  Node* diff = __ Float64Sub(value, trunc);
+  Node* check = __ Float64Equal(diff, __ Float64Constant(0));
+  __ GotoIfNot(check, &done, zero);
+  Node* in_range = __ Float64LessThanOrEqual(
+      __ Float64Abs(trunc), __ Float64Constant(kMaxSafeInteger));
+  __ Goto(&done, in_range);
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerObjectIsMinusZero(Node* node) {
+  Node* value = node->InputAt(0);
+  Node* zero = __ Int32Constant(0);
+
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
+
+  // Check if {value} is a Smi.
+  __ GotoIf(ObjectIsSmi(value), &done, zero);
+
+  // Check if {value} is a HeapNumber.
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  __ GotoIfNot(__ WordEqual(value_map, __ HeapNumberMapConstant()), &done,
+               zero);
+
+  // Check if {value} contains -0.
+  Node* value_value = __ LoadField(AccessBuilder::ForHeapNumberValue(), value);
+  __ Goto(&done,
+          __ Float64Equal(
+              __ Float64Div(__ Float64Constant(1.0), value_value),
+              __ Float64Constant(-std::numeric_limits<double>::infinity())));
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerObjectIsNaN(Node* node) {
+  Node* value = node->InputAt(0);
+  Node* zero = __ Int32Constant(0);
+
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
+
+  // Check if {value} is a Smi.
+  __ GotoIf(ObjectIsSmi(value), &done, zero);
+
+  // Check if {value} is a HeapNumber.
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  __ GotoIfNot(__ WordEqual(value_map, __ HeapNumberMapConstant()), &done,
+               zero);
+
+  // Check if {value} contains a NaN.
+  Node* value_value = __ LoadField(AccessBuilder::ForHeapNumberValue(), value);
+  __ Goto(&done,
+          __ Word32Equal(__ Float64Equal(value_value, value_value), zero));
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerNumberIsNaN(Node* node) {
+  Node* number = node->InputAt(0);
+  Node* diff = __ Float64Equal(number, number);
+  Node* check = __ Word32Equal(diff, __ Int32Constant(0));
+  return check;
+}
+
+Node* EffectControlLinearizer::LowerObjectIsNonCallable(Node* node) {
+  Node* value = node->InputAt(0);
+
+  auto if_primitive = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
+
+  Node* check0 = ObjectIsSmi(value);
+  __ GotoIf(check0, &if_primitive);
+
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* value_instance_type =
+      __ LoadField(AccessBuilder::ForMapInstanceType(), value_map);
+  STATIC_ASSERT(LAST_TYPE == LAST_JS_RECEIVER_TYPE);
+  Node* check1 = __ Uint32LessThanOrEqual(
+      __ Uint32Constant(FIRST_JS_RECEIVER_TYPE), value_instance_type);
+  __ GotoIfNot(check1, &if_primitive);
+
+  Node* value_bit_field =
+      __ LoadField(AccessBuilder::ForMapBitField(), value_map);
+  Node* check2 =
+      __ Word32Equal(__ Int32Constant(0),
+                     __ Word32And(value_bit_field,
+                                  __ Int32Constant(Map::IsCallableBit::kMask)));
+  __ Goto(&done, check2);
+
+  __ Bind(&if_primitive);
+  __ Goto(&done, __ Int32Constant(0));
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerObjectIsNumber(Node* node) {
+  Node* value = node->InputAt(0);
+
+  auto if_smi = __ MakeLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
+
+  __ GotoIf(ObjectIsSmi(value), &if_smi);
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  __ Goto(&done, __ WordEqual(value_map, __ HeapNumberMapConstant()));
+
+  __ Bind(&if_smi);
+  __ Goto(&done, __ Int32Constant(1));
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerObjectIsReceiver(Node* node) {
+  Node* value = node->InputAt(0);
+
+  auto if_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
+
+  __ GotoIf(ObjectIsSmi(value), &if_smi);
+
+  STATIC_ASSERT(LAST_TYPE == LAST_JS_RECEIVER_TYPE);
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* value_instance_type =
+      __ LoadField(AccessBuilder::ForMapInstanceType(), value_map);
+  Node* result = __ Uint32LessThanOrEqual(
+      __ Uint32Constant(FIRST_JS_RECEIVER_TYPE), value_instance_type);
+  __ Goto(&done, result);
+
+  __ Bind(&if_smi);
+  __ Goto(&done, __ Int32Constant(0));
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerObjectIsSmi(Node* node) {
+  Node* value = node->InputAt(0);
+  return ObjectIsSmi(value);
+}
+
+Node* EffectControlLinearizer::LowerObjectIsString(Node* node) {
+  Node* value = node->InputAt(0);
+
+  auto if_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
+
+  Node* check = ObjectIsSmi(value);
+  __ GotoIf(check, &if_smi);
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* value_instance_type =
+      __ LoadField(AccessBuilder::ForMapInstanceType(), value_map);
+  Node* vfalse = __ Uint32LessThan(value_instance_type,
+                                   __ Uint32Constant(FIRST_NONSTRING_TYPE));
+  __ Goto(&done, vfalse);
+
+  __ Bind(&if_smi);
+  __ Goto(&done, __ Int32Constant(0));
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerObjectIsSymbol(Node* node) {
+  Node* value = node->InputAt(0);
+
+  auto if_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
+
+  Node* check = ObjectIsSmi(value);
+  __ GotoIf(check, &if_smi);
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* value_instance_type =
+      __ LoadField(AccessBuilder::ForMapInstanceType(), value_map);
+  Node* vfalse =
+      __ Word32Equal(value_instance_type, __ Uint32Constant(SYMBOL_TYPE));
+  __ Goto(&done, vfalse);
+
+  __ Bind(&if_smi);
+  __ Goto(&done, __ Int32Constant(0));
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerObjectIsUndetectable(Node* node) {
+  Node* value = node->InputAt(0);
+
+  auto if_smi = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kBit);
+
+  Node* check = ObjectIsSmi(value);
+  __ GotoIf(check, &if_smi);
+
+  Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+  Node* value_bit_field =
+      __ LoadField(AccessBuilder::ForMapBitField(), value_map);
+  Node* vfalse = __ Word32Equal(
+      __ Word32Equal(
+          __ Int32Constant(0),
+          __ Word32And(value_bit_field,
+                       __ Int32Constant(Map::IsUndetectableBit::kMask))),
+      __ Int32Constant(0));
+  __ Goto(&done, vfalse);
+
+  __ Bind(&if_smi);
+  __ Goto(&done, __ Int32Constant(0));
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerTypeOf(Node* node) {
+  Node* obj = node->InputAt(0);
+  Callable const callable = Builtins::CallableFor(isolate(), Builtins::kTypeof);
+  Operator::Properties const properties = Operator::kEliminatable;
+  CallDescriptor::Flags const flags = CallDescriptor::kNoAllocate;
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(), 0, flags, properties);
+  return __ Call(call_descriptor, __ HeapConstant(callable.code()), obj,
+                 __ NoContextConstant());
+}
+
+Node* EffectControlLinearizer::LowerToBoolean(Node* node) {
+  Node* obj = node->InputAt(0);
+  Callable const callable =
+      Builtins::CallableFor(isolate(), Builtins::kToBoolean);
+  Operator::Properties const properties = Operator::kEliminatable;
+  CallDescriptor::Flags const flags = CallDescriptor::kNoAllocate;
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(), 0, flags, properties);
+  return __ Call(call_descriptor, __ HeapConstant(callable.code()), obj,
+                 __ NoContextConstant());
+}
+
+Node* EffectControlLinearizer::LowerArgumentsLength(Node* node) {
+  Node* arguments_frame = NodeProperties::GetValueInput(node, 0);
+  int formal_parameter_count = FormalParameterCountOf(node->op());
+  bool is_rest_length = IsRestLengthOf(node->op());
+  DCHECK_LE(0, formal_parameter_count);
+
+  if (is_rest_length) {
+    // The ArgumentsLength node is computing the number of rest parameters,
+    // which is max(0, actual_parameter_count - formal_parameter_count).
+    // We have to distinguish the case, when there is an arguments adaptor frame
+    // (i.e., arguments_frame != LoadFramePointer()).
+    auto if_adaptor_frame = __ MakeLabel();
+    auto done = __ MakeLabel(MachineRepresentation::kTaggedSigned);
+
+    Node* frame = __ LoadFramePointer();
+    __ GotoIf(__ WordEqual(arguments_frame, frame), &done, __ SmiConstant(0));
+    __ Goto(&if_adaptor_frame);
+
+    __ Bind(&if_adaptor_frame);
+    Node* arguments_length = __ Load(
+        MachineType::TaggedSigned(), arguments_frame,
+        __ IntPtrConstant(ArgumentsAdaptorFrameConstants::kLengthOffset));
+
+    Node* rest_length =
+        __ IntSub(arguments_length, __ SmiConstant(formal_parameter_count));
+    __ GotoIf(__ IntLessThan(rest_length, __ SmiConstant(0)), &done,
+              __ SmiConstant(0));
+    __ Goto(&done, rest_length);
+
+    __ Bind(&done);
+    return done.PhiAt(0);
+  } else {
+    // The ArgumentsLength node is computing the actual number of arguments.
+    // We have to distinguish the case when there is an arguments adaptor frame
+    // (i.e., arguments_frame != LoadFramePointer()).
+    auto if_adaptor_frame = __ MakeLabel();
+    auto done = __ MakeLabel(MachineRepresentation::kTaggedSigned);
+
+    Node* frame = __ LoadFramePointer();
+    __ GotoIf(__ WordEqual(arguments_frame, frame), &done,
+              __ SmiConstant(formal_parameter_count));
+    __ Goto(&if_adaptor_frame);
+
+    __ Bind(&if_adaptor_frame);
+    Node* arguments_length = __ Load(
+        MachineType::TaggedSigned(), arguments_frame,
+        __ IntPtrConstant(ArgumentsAdaptorFrameConstants::kLengthOffset));
+    __ Goto(&done, arguments_length);
+
+    __ Bind(&done);
+    return done.PhiAt(0);
+  }
+}
+
+Node* EffectControlLinearizer::LowerArgumentsFrame(Node* node) {
+  auto done = __ MakeLabel(MachineType::PointerRepresentation());
+
+  Node* frame = __ LoadFramePointer();
+  Node* parent_frame =
+      __ Load(MachineType::AnyTagged(), frame,
+              __ IntPtrConstant(StandardFrameConstants::kCallerFPOffset));
+  Node* parent_frame_type = __ Load(
+      MachineType::AnyTagged(), parent_frame,
+      __ IntPtrConstant(CommonFrameConstants::kContextOrFrameTypeOffset));
+  __ GotoIf(__ WordEqual(parent_frame_type,
+                         __ IntPtrConstant(StackFrame::TypeToMarker(
+                             StackFrame::ARGUMENTS_ADAPTOR))),
+            &done, parent_frame);
+  __ Goto(&done, frame);
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerNewDoubleElements(Node* node) {
+  PretenureFlag const pretenure = PretenureFlagOf(node->op());
+  Node* length = node->InputAt(0);
+
+  auto done = __ MakeLabel(MachineRepresentation::kTaggedPointer);
+  Node* zero_length = __ Word32Equal(length, __ Int32Constant(0));
+  __ GotoIf(zero_length, &done,
+            jsgraph()->HeapConstant(factory()->empty_fixed_array()));
+
+  // Compute the effective size of the backing store.
+  Node* size =
+      __ Int32Add(__ Word32Shl(length, __ Int32Constant(kDoubleSizeLog2)),
+                  __ Int32Constant(FixedDoubleArray::kHeaderSize));
+
+  // Allocate the result and initialize the header.
+  Node* result = __ Allocate(pretenure, size);
+  __ StoreField(AccessBuilder::ForMap(), result,
+                __ FixedDoubleArrayMapConstant());
+  __ StoreField(AccessBuilder::ForFixedArrayLength(), result,
+                ChangeInt32ToSmi(length));
+
+  // Initialize the backing store with holes.
+  STATIC_ASSERT(HeapNumber::kValueOffset == Oddball::kToNumberRawOffset);
+  Node* limit = ChangeUint32ToUintPtr(length);
+  Node* the_hole =
+      __ LoadField(AccessBuilder::ForHeapNumberValue(), __ TheHoleConstant());
+  auto loop = __ MakeLoopLabel(MachineType::PointerRepresentation());
+  __ Goto(&loop, __ IntPtrConstant(0));
+  __ Bind(&loop);
   {
-    // Check if the {lsubject} is a TwoByteSeqString or a OneByteSeqString.
-    Node* check1 = graph()->NewNode(
-        machine()->Word32Equal(),
-        graph()->NewNode(machine()->Word32And(), lsubject_instance_type,
-                         jsgraph()->Int32Constant(kStringEncodingMask)),
-        jsgraph()->Int32Constant(kTwoByteStringTag));
-    Node* branch1 = graph()->NewNode(common()->Branch(), check1, if_true0);
+    // Check if we've initialized everything.
+    Node* index = loop.PhiAt(0);
+    Node* check = __ UintLessThan(index, limit);
+    __ GotoIfNot(check, &done, result);
 
-    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-    Node* etrue1 = etrue0;
-    Node* vtrue1 = etrue1 =
-        graph()->NewNode(simplified()->LoadElement(
-                             AccessBuilder::ForSeqTwoByteStringCharacter()),
-                         lsubject, lindex, etrue1, if_true1);
+    // Storing "the_hole" doesn't need a write barrier.
+    StoreRepresentation rep(MachineRepresentation::kFloat64, kNoWriteBarrier);
+    Node* offset = __ IntAdd(
+        __ WordShl(index, __ IntPtrConstant(kDoubleSizeLog2)),
+        __ IntPtrConstant(FixedDoubleArray::kHeaderSize - kHeapObjectTag));
+    __ Store(rep, result, offset, the_hole);
 
-    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-    Node* efalse1 = etrue0;
-    Node* vfalse1 = efalse1 =
-        graph()->NewNode(simplified()->LoadElement(
-                             AccessBuilder::ForSeqOneByteStringCharacter()),
-                         lsubject, lindex, efalse1, if_false1);
-
-    if_true0 = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
-    etrue0 =
-        graph()->NewNode(common()->EffectPhi(2), etrue1, efalse1, if_true0);
-    vtrue0 = graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 2),
-                              vtrue1, vfalse1, if_true0);
+    // Advance the {index}.
+    index = __ IntAdd(index, __ IntPtrConstant(1));
+    __ Goto(&loop, index);
   }
 
-  Node* if_false0 = graph()->NewNode(common()->IfFalse(), branch0);
-  Node* efalse0 = effect;
-  Node* vfalse0;
-  {
-    // Check if the {lsubject} is a ConsString.
-    Node* check1 = graph()->NewNode(
-        machine()->Word32Equal(),
-        graph()->NewNode(machine()->Word32And(), lsubject_instance_type,
-                         jsgraph()->Int32Constant(kStringRepresentationMask)),
-        jsgraph()->Int32Constant(kConsStringTag));
-    Node* branch1 = graph()->NewNode(common()->Branch(), check1, if_false0);
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
 
-    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-    Node* etrue1 = efalse0;
+Node* EffectControlLinearizer::LowerNewSmiOrObjectElements(Node* node) {
+  PretenureFlag const pretenure = PretenureFlagOf(node->op());
+  Node* length = node->InputAt(0);
+
+  auto done = __ MakeLabel(MachineRepresentation::kTaggedPointer);
+  Node* zero_length = __ Word32Equal(length, __ Int32Constant(0));
+  __ GotoIf(zero_length, &done,
+            jsgraph()->HeapConstant(factory()->empty_fixed_array()));
+
+  // Compute the effective size of the backing store.
+  Node* size =
+      __ Int32Add(__ Word32Shl(length, __ Int32Constant(kPointerSizeLog2)),
+                  __ Int32Constant(FixedArray::kHeaderSize));
+
+  // Allocate the result and initialize the header.
+  Node* result = __ Allocate(pretenure, size);
+  __ StoreField(AccessBuilder::ForMap(), result, __ FixedArrayMapConstant());
+  __ StoreField(AccessBuilder::ForFixedArrayLength(), result,
+                ChangeInt32ToSmi(length));
+
+  // Initialize the backing store with holes.
+  Node* limit = ChangeUint32ToUintPtr(length);
+  Node* the_hole = __ TheHoleConstant();
+  auto loop = __ MakeLoopLabel(MachineType::PointerRepresentation());
+  __ Goto(&loop, __ IntPtrConstant(0));
+  __ Bind(&loop);
+  {
+    // Check if we've initialized everything.
+    Node* index = loop.PhiAt(0);
+    Node* check = __ UintLessThan(index, limit);
+    __ GotoIfNot(check, &done, result);
+
+    // Storing "the_hole" doesn't need a write barrier.
+    StoreRepresentation rep(MachineRepresentation::kTagged, kNoWriteBarrier);
+    Node* offset =
+        __ IntAdd(__ WordShl(index, __ IntPtrConstant(kPointerSizeLog2)),
+                  __ IntPtrConstant(FixedArray::kHeaderSize - kHeapObjectTag));
+    __ Store(rep, result, offset, the_hole);
+
+    // Advance the {index}.
+    index = __ IntAdd(index, __ IntPtrConstant(1));
+    __ Goto(&loop, index);
+  }
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerNewArgumentsElements(Node* node) {
+  Node* frame = NodeProperties::GetValueInput(node, 0);
+  Node* length = NodeProperties::GetValueInput(node, 1);
+  int mapped_count = NewArgumentsElementsMappedCountOf(node->op());
+
+  Callable const callable =
+      Builtins::CallableFor(isolate(), Builtins::kNewArgumentsElements);
+  Operator::Properties const properties = node->op()->properties();
+  CallDescriptor::Flags const flags = CallDescriptor::kNoFlags;
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(), 0, flags, properties);
+  return __ Call(call_descriptor, __ HeapConstant(callable.code()), frame,
+                 length, __ SmiConstant(mapped_count), __ NoContextConstant());
+}
+
+Node* EffectControlLinearizer::LowerNewConsString(Node* node) {
+  Node* length = node->InputAt(0);
+  Node* first = node->InputAt(1);
+  Node* second = node->InputAt(2);
+
+  // Determine the instance types of {first} and {second}.
+  Node* first_map = __ LoadField(AccessBuilder::ForMap(), first);
+  Node* first_instance_type =
+      __ LoadField(AccessBuilder::ForMapInstanceType(), first_map);
+  Node* second_map = __ LoadField(AccessBuilder::ForMap(), second);
+  Node* second_instance_type =
+      __ LoadField(AccessBuilder::ForMapInstanceType(), second_map);
+
+  // Determine the proper map for the resulting ConsString.
+  // If both {first} and {second} are one-byte strings, we
+  // create a new ConsOneByteString, otherwise we create a
+  // new ConsString instead.
+  auto if_onebyte = __ MakeLabel();
+  auto if_twobyte = __ MakeLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kTaggedPointer);
+  STATIC_ASSERT(kOneByteStringTag != 0);
+  STATIC_ASSERT(kTwoByteStringTag == 0);
+  Node* instance_type = __ Word32And(first_instance_type, second_instance_type);
+  Node* encoding =
+      __ Word32And(instance_type, __ Int32Constant(kStringEncodingMask));
+  __ Branch(__ Word32Equal(encoding, __ Int32Constant(kTwoByteStringTag)),
+            &if_twobyte, &if_onebyte);
+  __ Bind(&if_onebyte);
+  __ Goto(&done,
+          jsgraph()->HeapConstant(factory()->cons_one_byte_string_map()));
+  __ Bind(&if_twobyte);
+  __ Goto(&done, jsgraph()->HeapConstant(factory()->cons_string_map()));
+  __ Bind(&done);
+  Node* result_map = done.PhiAt(0);
+
+  // Allocate the resulting ConsString.
+  Node* result = __ Allocate(NOT_TENURED, __ Int32Constant(ConsString::kSize));
+  __ StoreField(AccessBuilder::ForMap(), result, result_map);
+  __ StoreField(AccessBuilder::ForNameHashField(), result,
+                jsgraph()->Int32Constant(Name::kEmptyHashField));
+  __ StoreField(AccessBuilder::ForStringLength(), result, length);
+  __ StoreField(AccessBuilder::ForConsStringFirst(), result, first);
+  __ StoreField(AccessBuilder::ForConsStringSecond(), result, second);
+  return result;
+}
+
+Node* EffectControlLinearizer::LowerArrayBufferWasNeutered(Node* node) {
+  Node* value = node->InputAt(0);
+
+  Node* value_bit_field =
+      __ LoadField(AccessBuilder::ForJSArrayBufferBitField(), value);
+  return __ Word32Equal(
+      __ Word32Equal(
+          __ Word32And(value_bit_field,
+                       __ Int32Constant(JSArrayBuffer::WasNeutered::kMask)),
+          __ Int32Constant(0)),
+      __ Int32Constant(0));
+}
+
+Node* EffectControlLinearizer::LowerSameValue(Node* node) {
+  Node* lhs = node->InputAt(0);
+  Node* rhs = node->InputAt(1);
+
+  Callable const callable =
+      Builtins::CallableFor(isolate(), Builtins::kSameValue);
+  Operator::Properties properties = Operator::kEliminatable;
+  CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(), 0, flags, properties);
+  return __ Call(call_descriptor, __ HeapConstant(callable.code()), lhs, rhs,
+                 __ NoContextConstant());
+}
+
+Node* EffectControlLinearizer::LowerDeadValue(Node* node) {
+  Node* input = NodeProperties::GetValueInput(node, 0);
+  if (input->opcode() != IrOpcode::kUnreachable) {
+    Node* unreachable = __ Unreachable();
+    NodeProperties::ReplaceValueInput(node, unreachable, 0);
+  }
+  return node;
+}
+
+Node* EffectControlLinearizer::LowerStringToNumber(Node* node) {
+  Node* string = node->InputAt(0);
+
+  Callable const callable =
+      Builtins::CallableFor(isolate(), Builtins::kStringToNumber);
+  Operator::Properties properties = Operator::kEliminatable;
+  CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(), 0, flags, properties);
+  return __ Call(call_descriptor, __ HeapConstant(callable.code()), string,
+                 __ NoContextConstant());
+}
+
+Node* EffectControlLinearizer::LowerStringCharCodeAt(Node* node) {
+  Node* receiver = node->InputAt(0);
+  Node* position = node->InputAt(1);
+
+  // We need a loop here to properly deal with indirect strings
+  // (SlicedString, ConsString and ThinString).
+  auto loop = __ MakeLoopLabel(MachineRepresentation::kTagged,
+                               MachineRepresentation::kWord32);
+  auto loop_next = __ MakeLabel(MachineRepresentation::kTagged,
+                                MachineRepresentation::kWord32);
+  auto loop_done = __ MakeLabel(MachineRepresentation::kWord32);
+  __ Goto(&loop, receiver, position);
+  __ Bind(&loop);
+  {
+    Node* receiver = loop.PhiAt(0);
+    Node* position = loop.PhiAt(1);
+    Node* receiver_map = __ LoadField(AccessBuilder::ForMap(), receiver);
+    Node* receiver_instance_type =
+        __ LoadField(AccessBuilder::ForMapInstanceType(), receiver_map);
+    Node* receiver_representation = __ Word32And(
+        receiver_instance_type, __ Int32Constant(kStringRepresentationMask));
+
+    // Dispatch on the current {receiver}s string representation.
+    auto if_seqstring = __ MakeLabel();
+    auto if_consstring = __ MakeLabel();
+    auto if_thinstring = __ MakeLabel();
+    auto if_externalstring = __ MakeLabel();
+    auto if_slicedstring = __ MakeLabel();
+    auto if_runtime = __ MakeDeferredLabel();
+    __ GotoIf(__ Word32Equal(receiver_representation,
+                             __ Int32Constant(kSeqStringTag)),
+              &if_seqstring);
+    __ GotoIf(__ Word32Equal(receiver_representation,
+                             __ Int32Constant(kConsStringTag)),
+              &if_consstring);
+    __ GotoIf(__ Word32Equal(receiver_representation,
+                             __ Int32Constant(kThinStringTag)),
+              &if_thinstring);
+    __ GotoIf(__ Word32Equal(receiver_representation,
+                             __ Int32Constant(kExternalStringTag)),
+              &if_externalstring);
+    __ Branch(__ Word32Equal(receiver_representation,
+                             __ Int32Constant(kSlicedStringTag)),
+              &if_slicedstring, &if_runtime);
+
+    __ Bind(&if_seqstring);
     {
-      // Load the right hand side of the {lsubject} ConsString.
-      Node* lsubject_second = etrue1 = graph()->NewNode(
-          simplified()->LoadField(AccessBuilder::ForConsStringSecond()),
-          lsubject, etrue1, if_true1);
-
-      // Check whether the right hand side is the empty string (i.e. if
-      // this is really a flat string in a cons string). If that is not
-      // the case we flatten the string first.
-      Node* check2 = graph()->NewNode(machine()->WordEqual(), lsubject_second,
-                                      jsgraph()->EmptyStringConstant());
-      Node* branch2 = graph()->NewNode(common()->Branch(BranchHint::kTrue),
-                                       check2, if_true1);
-
-      Node* if_true2 = graph()->NewNode(common()->IfTrue(), branch2);
-      Node* etrue2 = etrue1;
-      Node* vtrue2 = etrue2 = graph()->NewNode(
-          simplified()->LoadField(AccessBuilder::ForConsStringFirst()),
-          lsubject, etrue2, if_true2);
-
-      Node* if_false2 = graph()->NewNode(common()->IfFalse(), branch2);
-      Node* efalse2 = etrue1;
-      Node* vfalse2;
-      {
-        // Flatten the {lsubject} ConsString first.
-        Operator::Properties properties =
-            Operator::kNoDeopt | Operator::kNoThrow;
-        Runtime::FunctionId id = Runtime::kFlattenString;
-        CallDescriptor const* desc = Linkage::GetRuntimeCallDescriptor(
-            graph()->zone(), id, 1, properties, CallDescriptor::kNoFlags);
-        vfalse2 = efalse2 = graph()->NewNode(
-            common()->Call(desc), jsgraph()->CEntryStubConstant(1), lsubject,
-            jsgraph()->ExternalConstant(ExternalReference(id, isolate())),
-            jsgraph()->Int32Constant(1), jsgraph()->NoContextConstant(),
-            efalse2, if_false2);
-      }
-
-      // Retry the {loop} with the new subject.
-      loop->ReplaceInput(1, if_true2);
-      lindex->ReplaceInput(1, lindex);
-      leffect->ReplaceInput(1, etrue2);
-      lsubject->ReplaceInput(1, vtrue2);
-      loop->ReplaceInput(2, if_false2);
-      lindex->ReplaceInput(2, lindex);
-      leffect->ReplaceInput(2, efalse2);
-      lsubject->ReplaceInput(2, vfalse2);
+      Node* receiver_is_onebyte = __ Word32Equal(
+          __ Word32Equal(__ Word32And(receiver_instance_type,
+                                      __ Int32Constant(kStringEncodingMask)),
+                         __ Int32Constant(kTwoByteStringTag)),
+          __ Int32Constant(0));
+      Node* result = LoadFromSeqString(receiver, position, receiver_is_onebyte);
+      __ Goto(&loop_done, result);
     }
 
-    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-    Node* efalse1 = efalse0;
-    Node* vfalse1;
+    __ Bind(&if_thinstring);
     {
-      // Check if the {lsubject} is an ExternalString.
-      Node* check2 = graph()->NewNode(
-          machine()->Word32Equal(),
-          graph()->NewNode(machine()->Word32And(), lsubject_instance_type,
-                           jsgraph()->Int32Constant(kStringRepresentationMask)),
-          jsgraph()->Int32Constant(kExternalStringTag));
-      Node* branch2 = graph()->NewNode(common()->Branch(BranchHint::kTrue),
-                                       check2, if_false1);
-
-      Node* if_true2 = graph()->NewNode(common()->IfTrue(), branch2);
-      Node* etrue2 = efalse1;
-      Node* vtrue2;
-      {
-        // Check if the {lsubject} is a short external string.
-        Node* check3 = graph()->NewNode(
-            machine()->Word32Equal(),
-            graph()->NewNode(
-                machine()->Word32And(), lsubject_instance_type,
-                jsgraph()->Int32Constant(kShortExternalStringMask)),
-            jsgraph()->Int32Constant(0));
-        Node* branch3 = graph()->NewNode(common()->Branch(BranchHint::kTrue),
-                                         check3, if_true2);
-
-        Node* if_true3 = graph()->NewNode(common()->IfTrue(), branch3);
-        Node* etrue3 = etrue2;
-        Node* vtrue3;
-        {
-          // Load the actual resource data from the {lsubject}.
-          Node* lsubject_resource_data = etrue3 = graph()->NewNode(
-              simplified()->LoadField(
-                  AccessBuilder::ForExternalStringResourceData()),
-              lsubject, etrue3, if_true3);
-
-          // Check if the {lsubject} is a TwoByteExternalString or a
-          // OneByteExternalString.
-          Node* check4 = graph()->NewNode(
-              machine()->Word32Equal(),
-              graph()->NewNode(machine()->Word32And(), lsubject_instance_type,
-                               jsgraph()->Int32Constant(kStringEncodingMask)),
-              jsgraph()->Int32Constant(kTwoByteStringTag));
-          Node* branch4 =
-              graph()->NewNode(common()->Branch(), check4, if_true3);
-
-          Node* if_true4 = graph()->NewNode(common()->IfTrue(), branch4);
-          Node* etrue4 = etrue3;
-          Node* vtrue4 = etrue4 = graph()->NewNode(
-              simplified()->LoadElement(
-                  AccessBuilder::ForExternalTwoByteStringCharacter()),
-              lsubject_resource_data, lindex, etrue4, if_true4);
-
-          Node* if_false4 = graph()->NewNode(common()->IfFalse(), branch4);
-          Node* efalse4 = etrue3;
-          Node* vfalse4 = efalse4 = graph()->NewNode(
-              simplified()->LoadElement(
-                  AccessBuilder::ForExternalOneByteStringCharacter()),
-              lsubject_resource_data, lindex, efalse4, if_false4);
-
-          if_true3 = graph()->NewNode(common()->Merge(2), if_true4, if_false4);
-          etrue3 = graph()->NewNode(common()->EffectPhi(2), etrue4, efalse4,
-                                    if_true3);
-          vtrue3 =
-              graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 2),
-                               vtrue4, vfalse4, if_true3);
-        }
-
-        Node* if_false3 = graph()->NewNode(common()->IfFalse(), branch3);
-        Node* efalse3 = etrue2;
-        Node* vfalse3;
-        {
-          // The {lsubject} might be compressed, call the runtime.
-          Operator::Properties properties =
-              Operator::kNoDeopt | Operator::kNoThrow;
-          Runtime::FunctionId id = Runtime::kExternalStringGetChar;
-          CallDescriptor const* desc = Linkage::GetRuntimeCallDescriptor(
-              graph()->zone(), id, 2, properties, CallDescriptor::kNoFlags);
-          vfalse3 = efalse3 = graph()->NewNode(
-              common()->Call(desc), jsgraph()->CEntryStubConstant(1), lsubject,
-              ChangeInt32ToSmi(lindex),
-              jsgraph()->ExternalConstant(ExternalReference(id, isolate())),
-              jsgraph()->Int32Constant(2), jsgraph()->NoContextConstant(),
-              efalse3, if_false3);
-          vfalse3 = ChangeSmiToInt32(vfalse3);
-        }
-
-        if_true2 = graph()->NewNode(common()->Merge(2), if_true3, if_false3);
-        etrue2 =
-            graph()->NewNode(common()->EffectPhi(2), etrue3, efalse3, if_true2);
-        vtrue2 =
-            graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 2),
-                             vtrue3, vfalse3, if_true2);
-      }
-
-      Node* if_false2 = graph()->NewNode(common()->IfFalse(), branch2);
-      Node* efalse2 = efalse1;
-      {
-        // The {lsubject} is a SlicedString, continue with its parent.
-        Node* lsubject_parent = efalse2 = graph()->NewNode(
-            simplified()->LoadField(AccessBuilder::ForSlicedStringParent()),
-            lsubject, efalse2, if_false2);
-        Node* lsubject_offset = efalse2 = graph()->NewNode(
-            simplified()->LoadField(AccessBuilder::ForSlicedStringOffset()),
-            lsubject, efalse2, if_false2);
-        Node* lsubject_index = graph()->NewNode(
-            machine()->Int32Add(), lindex, ChangeSmiToInt32(lsubject_offset));
-
-        // Retry the {loop} with the parent subject.
-        loop->ReplaceInput(3, if_false2);
-        leffect->ReplaceInput(3, efalse2);
-        lindex->ReplaceInput(3, lsubject_index);
-        lsubject->ReplaceInput(3, lsubject_parent);
-      }
-
-      if_false1 = if_true2;
-      efalse1 = etrue2;
-      vfalse1 = vtrue2;
+      Node* receiver_actual =
+          __ LoadField(AccessBuilder::ForThinStringActual(), receiver);
+      __ Goto(&loop_next, receiver_actual, position);
     }
 
-    if_false0 = if_false1;
-    efalse0 = efalse1;
-    vfalse0 = vfalse1;
+    __ Bind(&if_consstring);
+    {
+      Node* receiver_second =
+          __ LoadField(AccessBuilder::ForConsStringSecond(), receiver);
+      __ GotoIfNot(__ WordEqual(receiver_second, __ EmptyStringConstant()),
+                   &if_runtime);
+      Node* receiver_first =
+          __ LoadField(AccessBuilder::ForConsStringFirst(), receiver);
+      __ Goto(&loop_next, receiver_first, position);
+    }
+
+    __ Bind(&if_externalstring);
+    {
+      // We need to bailout to the runtime for short external strings.
+      __ GotoIf(__ Word32Equal(
+                    __ Word32And(receiver_instance_type,
+                                 __ Int32Constant(kShortExternalStringMask)),
+                    __ Int32Constant(kShortExternalStringTag)),
+                &if_runtime);
+
+      Node* receiver_data = __ LoadField(
+          AccessBuilder::ForExternalStringResourceData(), receiver);
+
+      auto if_onebyte = __ MakeLabel();
+      auto if_twobyte = __ MakeLabel();
+      __ Branch(
+          __ Word32Equal(__ Word32And(receiver_instance_type,
+                                      __ Int32Constant(kStringEncodingMask)),
+                         __ Int32Constant(kTwoByteStringTag)),
+          &if_twobyte, &if_onebyte);
+
+      __ Bind(&if_onebyte);
+      {
+        Node* result = __ Load(MachineType::Uint8(), receiver_data,
+                               ChangeInt32ToIntPtr(position));
+        __ Goto(&loop_done, result);
+      }
+
+      __ Bind(&if_twobyte);
+      {
+        Node* result = __ Load(
+            MachineType::Uint16(), receiver_data,
+            __ Word32Shl(ChangeInt32ToIntPtr(position), __ Int32Constant(1)));
+        __ Goto(&loop_done, result);
+      }
+    }
+
+    __ Bind(&if_slicedstring);
+    {
+      Node* receiver_offset =
+          __ LoadField(AccessBuilder::ForSlicedStringOffset(), receiver);
+      Node* receiver_parent =
+          __ LoadField(AccessBuilder::ForSlicedStringParent(), receiver);
+      __ Goto(&loop_next, receiver_parent,
+              __ Int32Add(position, ChangeSmiToInt32(receiver_offset)));
+    }
+
+    __ Bind(&if_runtime);
+    {
+      Operator::Properties properties = Operator::kNoDeopt | Operator::kNoThrow;
+      Runtime::FunctionId id = Runtime::kStringCharCodeAt;
+      auto call_descriptor = Linkage::GetRuntimeCallDescriptor(
+          graph()->zone(), id, 2, properties, CallDescriptor::kNoFlags);
+      Node* result = __ Call(call_descriptor, __ CEntryStubConstant(1),
+                             receiver, ChangeInt32ToSmi(position),
+                             __ ExternalConstant(ExternalReference::Create(id)),
+                             __ Int32Constant(2), __ NoContextConstant());
+      __ Goto(&loop_done, ChangeSmiToInt32(result));
+    }
+
+    __ Bind(&loop_next);
+    __ Goto(&loop, loop_next.PhiAt(0), loop_next.PhiAt(1));
   }
-
-  control = graph()->NewNode(common()->Merge(2), if_true0, if_false0);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue0, efalse0, control);
-  Node* value =
-      graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 2), vtrue0,
-                       vfalse0, control);
-
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&loop_done);
+  return loop_done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerStringFromCharCode(Node* node, Node* effect,
-                                                 Node* control) {
+Node* EffectControlLinearizer::LowerStringCodePointAt(
+    Node* node, UnicodeEncoding encoding) {
+  Node* receiver = node->InputAt(0);
+  Node* position = node->InputAt(1);
+
+  Builtins::Name builtin = encoding == UnicodeEncoding::UTF16
+                               ? Builtins::kStringCodePointAtUTF16
+                               : Builtins::kStringCodePointAtUTF32;
+
+  Callable const callable = Builtins::CallableFor(isolate(), builtin);
+  Operator::Properties properties = Operator::kNoThrow | Operator::kNoWrite;
+  CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(), 0, flags, properties);
+  return __ Call(call_descriptor, __ HeapConstant(callable.code()), receiver,
+                 position, __ NoContextConstant());
+}
+
+Node* EffectControlLinearizer::LoadFromSeqString(Node* receiver, Node* position,
+                                                 Node* is_one_byte) {
+  auto one_byte_load = __ MakeLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kWord32);
+  __ GotoIf(is_one_byte, &one_byte_load);
+  Node* two_byte_result = __ LoadElement(
+      AccessBuilder::ForSeqTwoByteStringCharacter(), receiver, position);
+  __ Goto(&done, two_byte_result);
+
+  __ Bind(&one_byte_load);
+  Node* one_byte_element = __ LoadElement(
+      AccessBuilder::ForSeqOneByteStringCharacter(), receiver, position);
+  __ Goto(&done, one_byte_element);
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerStringFromSingleCharCode(Node* node) {
   Node* value = node->InputAt(0);
+  Node* code = __ Word32And(value, __ Uint32Constant(0xFFFF));
 
-  // Compute the character code.
-  Node* code =
-      graph()->NewNode(machine()->Word32And(), value,
-                       jsgraph()->Int32Constant(String::kMaxUtf16CodeUnit));
+  auto if_not_one_byte = __ MakeDeferredLabel();
+  auto cache_miss = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kTagged);
 
-  // Check if the {code} is a one-byte char code.
-  Node* check0 =
-      graph()->NewNode(machine()->Int32LessThanOrEqual(), code,
-                       jsgraph()->Int32Constant(String::kMaxOneByteCharCode));
-  Node* branch0 =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check0, control);
-
-  Node* if_true0 = graph()->NewNode(common()->IfTrue(), branch0);
-  Node* etrue0 = effect;
-  Node* vtrue0;
+  // Check if the {code} is a one byte character
+  Node* check1 = __ Uint32LessThanOrEqual(
+      code, __ Uint32Constant(String::kMaxOneByteCharCode));
+  __ GotoIfNot(check1, &if_not_one_byte);
   {
     // Load the isolate wide single character string cache.
-    Node* cache =
-        jsgraph()->HeapConstant(factory()->single_character_string_cache());
+    Node* cache = __ HeapConstant(factory()->single_character_string_cache());
 
     // Compute the {cache} index for {code}.
-    Node* index =
-        machine()->Is32() ? code : graph()->NewNode(
-                                       machine()->ChangeUint32ToUint64(), code);
+    Node* index = machine()->Is32() ? code : __ ChangeUint32ToUint64(code);
 
     // Check if we have an entry for the {code} in the single character string
     // cache already.
-    Node* entry = etrue0 = graph()->NewNode(
-        simplified()->LoadElement(AccessBuilder::ForFixedArrayElement()), cache,
-        index, etrue0, if_true0);
+    Node* entry =
+        __ LoadElement(AccessBuilder::ForFixedArrayElement(), cache, index);
 
-    Node* check1 = graph()->NewNode(machine()->WordEqual(), entry,
-                                    jsgraph()->UndefinedConstant());
-    Node* branch1 = graph()->NewNode(common()->Branch(BranchHint::kFalse),
-                                     check1, if_true0);
-
-    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-    Node* etrue1 = etrue0;
-    Node* vtrue1;
-    {
-      // Allocate a new SeqOneByteString for {code}.
-      vtrue1 = etrue1 = graph()->NewNode(
-          simplified()->Allocate(NOT_TENURED),
-          jsgraph()->Int32Constant(SeqOneByteString::SizeFor(1)), etrue1,
-          if_true1);
-      etrue1 = graph()->NewNode(
-          simplified()->StoreField(AccessBuilder::ForMap()), vtrue1,
-          jsgraph()->HeapConstant(factory()->one_byte_string_map()), etrue1,
-          if_true1);
-      etrue1 = graph()->NewNode(
-          simplified()->StoreField(AccessBuilder::ForNameHashField()), vtrue1,
-          jsgraph()->IntPtrConstant(Name::kEmptyHashField), etrue1, if_true1);
-      etrue1 = graph()->NewNode(
-          simplified()->StoreField(AccessBuilder::ForStringLength()), vtrue1,
-          jsgraph()->SmiConstant(1), etrue1, if_true1);
-      etrue1 = graph()->NewNode(
-          machine()->Store(StoreRepresentation(MachineRepresentation::kWord8,
-                                               kNoWriteBarrier)),
-          vtrue1, jsgraph()->IntPtrConstant(SeqOneByteString::kHeaderSize -
-                                            kHeapObjectTag),
-          code, etrue1, if_true1);
-
-      // Remember it in the {cache}.
-      etrue1 = graph()->NewNode(
-          simplified()->StoreElement(AccessBuilder::ForFixedArrayElement()),
-          cache, index, vtrue1, etrue1, if_true1);
-    }
+    Node* check2 = __ WordEqual(entry, __ UndefinedConstant());
+    __ GotoIf(check2, &cache_miss);
 
     // Use the {entry} from the {cache}.
-    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-    Node* efalse1 = etrue0;
-    Node* vfalse1 = entry;
+    __ Goto(&done, entry);
 
-    if_true0 = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
-    etrue0 =
-        graph()->NewNode(common()->EffectPhi(2), etrue1, efalse1, if_true0);
-    vtrue0 = graph()->NewNode(common()->Phi(MachineRepresentation::kTagged, 2),
-                              vtrue1, vfalse1, if_true0);
+    __ Bind(&cache_miss);
+    {
+      // Allocate a new SeqOneByteString for {code}.
+      Node* vtrue2 = __ Allocate(
+          NOT_TENURED, __ Int32Constant(SeqOneByteString::SizeFor(1)));
+      __ StoreField(AccessBuilder::ForMap(), vtrue2,
+                    __ HeapConstant(factory()->one_byte_string_map()));
+      __ StoreField(AccessBuilder::ForNameHashField(), vtrue2,
+                    __ IntPtrConstant(Name::kEmptyHashField));
+      __ StoreField(AccessBuilder::ForStringLength(), vtrue2,
+                    __ SmiConstant(1));
+      __ Store(
+          StoreRepresentation(MachineRepresentation::kWord8, kNoWriteBarrier),
+          vtrue2,
+          __ IntPtrConstant(SeqOneByteString::kHeaderSize - kHeapObjectTag),
+          code);
+
+      // Remember it in the {cache}.
+      __ StoreElement(AccessBuilder::ForFixedArrayElement(), cache, index,
+                      vtrue2);
+      __ Goto(&done, vtrue2);
+    }
   }
 
-  Node* if_false0 = graph()->NewNode(common()->IfFalse(), branch0);
-  Node* efalse0 = effect;
-  Node* vfalse0;
+  __ Bind(&if_not_one_byte);
   {
     // Allocate a new SeqTwoByteString for {code}.
-    vfalse0 = efalse0 =
-        graph()->NewNode(simplified()->Allocate(NOT_TENURED),
-                         jsgraph()->Int32Constant(SeqTwoByteString::SizeFor(1)),
-                         efalse0, if_false0);
-    efalse0 = graph()->NewNode(
-        simplified()->StoreField(AccessBuilder::ForMap()), vfalse0,
-        jsgraph()->HeapConstant(factory()->string_map()), efalse0, if_false0);
-    efalse0 = graph()->NewNode(
-        simplified()->StoreField(AccessBuilder::ForNameHashField()), vfalse0,
-        jsgraph()->IntPtrConstant(Name::kEmptyHashField), efalse0, if_false0);
-    efalse0 = graph()->NewNode(
-        simplified()->StoreField(AccessBuilder::ForStringLength()), vfalse0,
-        jsgraph()->SmiConstant(1), efalse0, if_false0);
-    efalse0 = graph()->NewNode(
-        machine()->Store(StoreRepresentation(MachineRepresentation::kWord16,
-                                             kNoWriteBarrier)),
-        vfalse0, jsgraph()->IntPtrConstant(SeqTwoByteString::kHeaderSize -
-                                           kHeapObjectTag),
-        code, efalse0, if_false0);
+    Node* vfalse1 = __ Allocate(NOT_TENURED,
+                                __ Int32Constant(SeqTwoByteString::SizeFor(1)));
+    __ StoreField(AccessBuilder::ForMap(), vfalse1,
+                  __ HeapConstant(factory()->string_map()));
+    __ StoreField(AccessBuilder::ForNameHashField(), vfalse1,
+                  __ IntPtrConstant(Name::kEmptyHashField));
+    __ StoreField(AccessBuilder::ForStringLength(), vfalse1, __ SmiConstant(1));
+    __ Store(
+        StoreRepresentation(MachineRepresentation::kWord16, kNoWriteBarrier),
+        vfalse1,
+        __ IntPtrConstant(SeqTwoByteString::kHeaderSize - kHeapObjectTag),
+        code);
+    __ Goto(&done, vfalse1);
   }
 
-  control = graph()->NewNode(common()->Merge(2), if_true0, if_false0);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue0, efalse0, control);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kTagged, 2),
-                           vtrue0, vfalse0, control);
-
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckFloat64Hole(Node* node, Node* frame_state,
-                                               Node* effect, Node* control) {
+#ifdef V8_INTL_SUPPORT
+
+Node* EffectControlLinearizer::LowerStringToLowerCaseIntl(Node* node) {
+  Node* receiver = node->InputAt(0);
+
+  Callable callable =
+      Builtins::CallableFor(isolate(), Builtins::kStringToLowerCaseIntl);
+  Operator::Properties properties = Operator::kNoDeopt | Operator::kNoThrow;
+  CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(), 0, flags, properties);
+  return __ Call(call_descriptor, __ HeapConstant(callable.code()), receiver,
+                 __ NoContextConstant());
+}
+
+Node* EffectControlLinearizer::LowerStringToUpperCaseIntl(Node* node) {
+  Node* receiver = node->InputAt(0);
+  Operator::Properties properties = Operator::kNoDeopt | Operator::kNoThrow;
+  Runtime::FunctionId id = Runtime::kStringToUpperCaseIntl;
+  auto call_descriptor = Linkage::GetRuntimeCallDescriptor(
+      graph()->zone(), id, 1, properties, CallDescriptor::kNoFlags);
+  return __ Call(call_descriptor, __ CEntryStubConstant(1), receiver,
+                 __ ExternalConstant(ExternalReference::Create(id)),
+                 __ Int32Constant(1), __ NoContextConstant());
+}
+
+#else
+
+Node* EffectControlLinearizer::LowerStringToLowerCaseIntl(Node* node) {
+  UNREACHABLE();
+  return nullptr;
+}
+
+Node* EffectControlLinearizer::LowerStringToUpperCaseIntl(Node* node) {
+  UNREACHABLE();
+  return nullptr;
+}
+
+#endif  // V8_INTL_SUPPORT
+
+Node* EffectControlLinearizer::LowerStringFromSingleCodePoint(Node* node) {
+  Node* value = node->InputAt(0);
+  Node* code = value;
+
+  auto if_not_single_code = __ MakeDeferredLabel();
+  auto if_not_one_byte = __ MakeDeferredLabel();
+  auto cache_miss = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kTagged);
+
+  // Check if the {code} is a single code unit
+  Node* check0 = __ Uint32LessThanOrEqual(code, __ Uint32Constant(0xFFFF));
+  __ GotoIfNot(check0, &if_not_single_code);
+
+  {
+    // Check if the {code} is a one byte character
+    Node* check1 = __ Uint32LessThanOrEqual(
+        code, __ Uint32Constant(String::kMaxOneByteCharCode));
+    __ GotoIfNot(check1, &if_not_one_byte);
+    {
+      // Load the isolate wide single character string cache.
+      Node* cache = __ HeapConstant(factory()->single_character_string_cache());
+
+      // Compute the {cache} index for {code}.
+      Node* index = machine()->Is32() ? code : __ ChangeUint32ToUint64(code);
+
+      // Check if we have an entry for the {code} in the single character string
+      // cache already.
+      Node* entry =
+          __ LoadElement(AccessBuilder::ForFixedArrayElement(), cache, index);
+
+      Node* check2 = __ WordEqual(entry, __ UndefinedConstant());
+      __ GotoIf(check2, &cache_miss);
+
+      // Use the {entry} from the {cache}.
+      __ Goto(&done, entry);
+
+      __ Bind(&cache_miss);
+      {
+        // Allocate a new SeqOneByteString for {code}.
+        Node* vtrue2 = __ Allocate(
+            NOT_TENURED, __ Int32Constant(SeqOneByteString::SizeFor(1)));
+        __ StoreField(AccessBuilder::ForMap(), vtrue2,
+                      __ HeapConstant(factory()->one_byte_string_map()));
+        __ StoreField(AccessBuilder::ForNameHashField(), vtrue2,
+                      __ IntPtrConstant(Name::kEmptyHashField));
+        __ StoreField(AccessBuilder::ForStringLength(), vtrue2,
+                      __ SmiConstant(1));
+        __ Store(
+            StoreRepresentation(MachineRepresentation::kWord8, kNoWriteBarrier),
+            vtrue2,
+            __ IntPtrConstant(SeqOneByteString::kHeaderSize - kHeapObjectTag),
+            code);
+
+        // Remember it in the {cache}.
+        __ StoreElement(AccessBuilder::ForFixedArrayElement(), cache, index,
+                        vtrue2);
+        __ Goto(&done, vtrue2);
+      }
+    }
+
+    __ Bind(&if_not_one_byte);
+    {
+      // Allocate a new SeqTwoByteString for {code}.
+      Node* vfalse1 = __ Allocate(
+          NOT_TENURED, __ Int32Constant(SeqTwoByteString::SizeFor(1)));
+      __ StoreField(AccessBuilder::ForMap(), vfalse1,
+                    __ HeapConstant(factory()->string_map()));
+      __ StoreField(AccessBuilder::ForNameHashField(), vfalse1,
+                    __ IntPtrConstant(Name::kEmptyHashField));
+      __ StoreField(AccessBuilder::ForStringLength(), vfalse1,
+                    __ SmiConstant(1));
+      __ Store(
+          StoreRepresentation(MachineRepresentation::kWord16, kNoWriteBarrier),
+          vfalse1,
+          __ IntPtrConstant(SeqTwoByteString::kHeaderSize - kHeapObjectTag),
+          code);
+      __ Goto(&done, vfalse1);
+    }
+  }
+
+  __ Bind(&if_not_single_code);
+  // Generate surrogate pair string
+  {
+    switch (UnicodeEncodingOf(node->op())) {
+      case UnicodeEncoding::UTF16:
+        break;
+
+      case UnicodeEncoding::UTF32: {
+        // Convert UTF32 to UTF16 code units, and store as a 32 bit word.
+        Node* lead_offset = __ Int32Constant(0xD800 - (0x10000 >> 10));
+
+        // lead = (codepoint >> 10) + LEAD_OFFSET
+        Node* lead =
+            __ Int32Add(__ Word32Shr(code, __ Int32Constant(10)), lead_offset);
+
+        // trail = (codepoint & 0x3FF) + 0xDC00;
+        Node* trail = __ Int32Add(__ Word32And(code, __ Int32Constant(0x3FF)),
+                                  __ Int32Constant(0xDC00));
+
+        // codpoint = (trail << 16) | lead;
+#if V8_TARGET_BIG_ENDIAN
+        code = __ Word32Or(__ Word32Shl(lead, __ Int32Constant(16)), trail);
+#else
+        code = __ Word32Or(__ Word32Shl(trail, __ Int32Constant(16)), lead);
+#endif
+        break;
+      }
+    }
+
+    // Allocate a new SeqTwoByteString for {code}.
+    Node* vfalse0 = __ Allocate(NOT_TENURED,
+                                __ Int32Constant(SeqTwoByteString::SizeFor(2)));
+    __ StoreField(AccessBuilder::ForMap(), vfalse0,
+                  __ HeapConstant(factory()->string_map()));
+    __ StoreField(AccessBuilder::ForNameHashField(), vfalse0,
+                  __ IntPtrConstant(Name::kEmptyHashField));
+    __ StoreField(AccessBuilder::ForStringLength(), vfalse0, __ SmiConstant(2));
+    __ Store(
+        StoreRepresentation(MachineRepresentation::kWord32, kNoWriteBarrier),
+        vfalse0,
+        __ IntPtrConstant(SeqTwoByteString::kHeaderSize - kHeapObjectTag),
+        code);
+    __ Goto(&done, vfalse0);
+  }
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerStringIndexOf(Node* node) {
+  Node* subject = node->InputAt(0);
+  Node* search_string = node->InputAt(1);
+  Node* position = node->InputAt(2);
+
+  Callable callable =
+      Builtins::CallableFor(isolate(), Builtins::kStringIndexOf);
+  Operator::Properties properties = Operator::kEliminatable;
+  CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(), 0, flags, properties);
+  return __ Call(call_descriptor, __ HeapConstant(callable.code()), subject,
+                 search_string, position, __ NoContextConstant());
+}
+
+Node* EffectControlLinearizer::LowerStringLength(Node* node) {
+  Node* subject = node->InputAt(0);
+
+  return __ LoadField(AccessBuilder::ForStringLength(), subject);
+}
+
+Node* EffectControlLinearizer::LowerStringComparison(Callable const& callable,
+                                                     Node* node) {
+  Node* lhs = node->InputAt(0);
+  Node* rhs = node->InputAt(1);
+
+  Operator::Properties properties = Operator::kEliminatable;
+  CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(), 0, flags, properties);
+  return __ Call(call_descriptor, __ HeapConstant(callable.code()), lhs, rhs,
+                 __ NoContextConstant());
+}
+
+Node* EffectControlLinearizer::LowerStringSubstring(Node* node) {
+  Node* receiver = node->InputAt(0);
+  Node* start = ChangeInt32ToIntPtr(node->InputAt(1));
+  Node* end = ChangeInt32ToIntPtr(node->InputAt(2));
+
+  Callable callable =
+      Builtins::CallableFor(isolate(), Builtins::kStringSubstring);
+  Operator::Properties properties = Operator::kEliminatable;
+  CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(), 0, flags, properties);
+  return __ Call(call_descriptor, __ HeapConstant(callable.code()), receiver,
+                 start, end, __ NoContextConstant());
+}
+
+Node* EffectControlLinearizer::LowerStringEqual(Node* node) {
+  return LowerStringComparison(
+      Builtins::CallableFor(isolate(), Builtins::kStringEqual), node);
+}
+
+Node* EffectControlLinearizer::LowerStringLessThan(Node* node) {
+  return LowerStringComparison(
+      Builtins::CallableFor(isolate(), Builtins::kStringLessThan), node);
+}
+
+Node* EffectControlLinearizer::LowerStringLessThanOrEqual(Node* node) {
+  return LowerStringComparison(
+      Builtins::CallableFor(isolate(), Builtins::kStringLessThanOrEqual), node);
+}
+
+Node* EffectControlLinearizer::LowerCheckFloat64Hole(Node* node,
+                                                     Node* frame_state) {
   // If we reach this point w/o eliminating the {node} that's marked
   // with allow-return-hole, we cannot do anything, so just deoptimize
-  // in case of the hole NaN (similar to Crankshaft).
+  // in case of the hole NaN.
+  CheckFloat64HoleParameters const& params =
+      CheckFloat64HoleParametersOf(node->op());
   Node* value = node->InputAt(0);
-  Node* check = graph()->NewNode(
-      machine()->Word32Equal(),
-      graph()->NewNode(machine()->Float64ExtractHighWord32(), value),
-      jsgraph()->Int32Constant(kHoleNanUpper32));
-  control = effect =
-      graph()->NewNode(common()->DeoptimizeIf(DeoptimizeReason::kHole), check,
-                       frame_state, effect, control);
-
-  return ValueEffectControl(value, effect, control);
+  Node* check = __ Word32Equal(__ Float64ExtractHighWord32(value),
+                               __ Int32Constant(kHoleNanUpper32));
+  __ DeoptimizeIf(DeoptimizeReason::kHole, params.feedback(), check,
+                  frame_state);
+  return value;
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerCheckTaggedHole(Node* node, Node* frame_state,
-                                              Node* effect, Node* control) {
+Node* EffectControlLinearizer::LowerCheckNotTaggedHole(Node* node,
+                                                       Node* frame_state) {
   Node* value = node->InputAt(0);
-  Node* check = graph()->NewNode(machine()->WordEqual(), value,
-                                 jsgraph()->TheHoleConstant());
-  control = effect =
-      graph()->NewNode(common()->DeoptimizeIf(DeoptimizeReason::kHole), check,
-                       frame_state, effect, control);
-
-  return ValueEffectControl(value, effect, control);
+  Node* check = __ WordEqual(value, __ TheHoleConstant());
+  __ DeoptimizeIf(DeoptimizeReason::kHole, VectorSlotPair(), check,
+                  frame_state);
+  return value;
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerConvertTaggedHoleToUndefined(Node* node,
-                                                           Node* effect,
-                                                           Node* control) {
+Node* EffectControlLinearizer::LowerConvertTaggedHoleToUndefined(Node* node) {
   Node* value = node->InputAt(0);
-  Node* check = graph()->NewNode(machine()->WordEqual(), value,
-                                 jsgraph()->TheHoleConstant());
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kFalse), check, control);
 
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* vtrue = jsgraph()->UndefinedConstant();
+  auto if_is_hole = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kTagged);
 
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* vfalse = value;
+  Node* check = __ WordEqual(value, __ TheHoleConstant());
+  __ GotoIf(check, &if_is_hole);
+  __ Goto(&done, value);
 
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kTagged, 2),
-                           vtrue, vfalse, control);
+  __ Bind(&if_is_hole);
+  __ Goto(&done, __ UndefinedConstant());
 
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::AllocateHeapNumberWithValue(Node* value, Node* effect,
-                                                     Node* control) {
-  Node* result = effect = graph()->NewNode(
-      simplified()->Allocate(NOT_TENURED),
-      jsgraph()->Int32Constant(HeapNumber::kSize), effect, control);
-  effect = graph()->NewNode(simplified()->StoreField(AccessBuilder::ForMap()),
-                            result, jsgraph()->HeapNumberMapConstant(), effect,
-                            control);
-  effect = graph()->NewNode(
-      simplified()->StoreField(AccessBuilder::ForHeapNumberValue()), result,
-      value, effect, control);
-  return ValueEffectControl(result, effect, control);
+void EffectControlLinearizer::LowerCheckEqualsInternalizedString(
+    Node* node, Node* frame_state) {
+  Node* exp = node->InputAt(0);
+  Node* val = node->InputAt(1);
+
+  auto if_same = __ MakeLabel();
+  auto if_notsame = __ MakeDeferredLabel();
+  auto if_thinstring = __ MakeLabel();
+  auto if_notthinstring = __ MakeLabel();
+
+  // Check if {exp} and {val} are the same, which is the likely case.
+  __ Branch(__ WordEqual(exp, val), &if_same, &if_notsame);
+
+  __ Bind(&if_notsame);
+  {
+    // Now {val} could still be a non-internalized String that matches {exp}.
+    __ DeoptimizeIf(DeoptimizeReason::kWrongName, VectorSlotPair(),
+                    ObjectIsSmi(val), frame_state);
+    Node* val_map = __ LoadField(AccessBuilder::ForMap(), val);
+    Node* val_instance_type =
+        __ LoadField(AccessBuilder::ForMapInstanceType(), val_map);
+
+    // Check for the common case of ThinString first.
+    __ GotoIf(__ Word32Equal(val_instance_type,
+                             __ Int32Constant(THIN_ONE_BYTE_STRING_TYPE)),
+              &if_thinstring);
+    __ Branch(
+        __ Word32Equal(val_instance_type, __ Int32Constant(THIN_STRING_TYPE)),
+        &if_thinstring, &if_notthinstring);
+
+    __ Bind(&if_notthinstring);
+    {
+      // Check that the {val} is a non-internalized String, if it's anything
+      // else it cannot match the recorded feedback {exp} anyways.
+      __ DeoptimizeIfNot(
+          DeoptimizeReason::kWrongName, VectorSlotPair(),
+          __ Word32Equal(__ Word32And(val_instance_type,
+                                      __ Int32Constant(kIsNotStringMask |
+                                                       kIsNotInternalizedMask)),
+                         __ Int32Constant(kStringTag | kNotInternalizedTag)),
+          frame_state);
+
+      // Try to find the {val} in the string table.
+      MachineSignature::Builder builder(graph()->zone(), 1, 2);
+      builder.AddReturn(MachineType::AnyTagged());
+      builder.AddParam(MachineType::Pointer());
+      builder.AddParam(MachineType::AnyTagged());
+      Node* try_internalize_string_function = __ ExternalConstant(
+          ExternalReference::try_internalize_string_function());
+      Node* const isolate_ptr =
+          __ ExternalConstant(ExternalReference::isolate_address(isolate()));
+      auto call_descriptor =
+          Linkage::GetSimplifiedCDescriptor(graph()->zone(), builder.Build());
+      Node* val_internalized =
+          __ Call(common()->Call(call_descriptor),
+                  try_internalize_string_function, isolate_ptr, val);
+
+      // Now see if the results match.
+      __ DeoptimizeIfNot(DeoptimizeReason::kWrongName, VectorSlotPair(),
+                         __ WordEqual(exp, val_internalized), frame_state);
+      __ Goto(&if_same);
+    }
+
+    __ Bind(&if_thinstring);
+    {
+      // The {val} is a ThinString, let's check the actual value.
+      Node* val_actual =
+          __ LoadField(AccessBuilder::ForThinStringActual(), val);
+      __ DeoptimizeIfNot(DeoptimizeReason::kWrongName, VectorSlotPair(),
+                         __ WordEqual(exp, val_actual), frame_state);
+      __ Goto(&if_same);
+    }
+  }
+
+  __ Bind(&if_same);
+}
+
+void EffectControlLinearizer::LowerCheckEqualsSymbol(Node* node,
+                                                     Node* frame_state) {
+  Node* exp = node->InputAt(0);
+  Node* val = node->InputAt(1);
+  Node* check = __ WordEqual(exp, val);
+  __ DeoptimizeIfNot(DeoptimizeReason::kWrongName, VectorSlotPair(), check,
+                     frame_state);
+}
+
+Node* EffectControlLinearizer::AllocateHeapNumberWithValue(Node* value) {
+  Node* result = __ Allocate(NOT_TENURED, __ Int32Constant(HeapNumber::kSize));
+  __ StoreField(AccessBuilder::ForMap(), result, __ HeapNumberMapConstant());
+  __ StoreField(AccessBuilder::ForHeapNumberValue(), result, value);
+  return result;
 }
 
 Node* EffectControlLinearizer::ChangeInt32ToSmi(Node* value) {
+  return __ WordShl(ChangeInt32ToIntPtr(value), SmiShiftBitsConstant());
+}
+
+Node* EffectControlLinearizer::ChangeInt32ToIntPtr(Node* value) {
   if (machine()->Is64()) {
-    value = graph()->NewNode(machine()->ChangeInt32ToInt64(), value);
-  }
-  return graph()->NewNode(machine()->WordShl(), value, SmiShiftBitsConstant());
-}
-
-Node* EffectControlLinearizer::ChangeUint32ToSmi(Node* value) {
-  if (machine()->Is64()) {
-    value = graph()->NewNode(machine()->ChangeUint32ToUint64(), value);
-  }
-  return graph()->NewNode(machine()->WordShl(), value, SmiShiftBitsConstant());
-}
-
-Node* EffectControlLinearizer::ChangeInt32ToFloat64(Node* value) {
-  return graph()->NewNode(machine()->ChangeInt32ToFloat64(), value);
-}
-
-Node* EffectControlLinearizer::ChangeUint32ToFloat64(Node* value) {
-  return graph()->NewNode(machine()->ChangeUint32ToFloat64(), value);
-}
-
-Node* EffectControlLinearizer::ChangeSmiToInt32(Node* value) {
-  value = graph()->NewNode(machine()->WordSar(), value, SmiShiftBitsConstant());
-  if (machine()->Is64()) {
-    value = graph()->NewNode(machine()->TruncateInt64ToInt32(), value);
+    value = __ ChangeInt32ToInt64(value);
   }
   return value;
 }
+
+Node* EffectControlLinearizer::ChangeIntPtrToInt32(Node* value) {
+  if (machine()->Is64()) {
+    value = __ TruncateInt64ToInt32(value);
+  }
+  return value;
+}
+
+Node* EffectControlLinearizer::ChangeUint32ToUintPtr(Node* value) {
+  if (machine()->Is64()) {
+    value = __ ChangeUint32ToUint64(value);
+  }
+  return value;
+}
+
+Node* EffectControlLinearizer::ChangeUint32ToSmi(Node* value) {
+  value = ChangeUint32ToUintPtr(value);
+  return __ WordShl(value, SmiShiftBitsConstant());
+}
+
+Node* EffectControlLinearizer::ChangeSmiToIntPtr(Node* value) {
+  return __ WordSar(value, SmiShiftBitsConstant());
+}
+
+Node* EffectControlLinearizer::ChangeSmiToInt32(Node* value) {
+  value = ChangeSmiToIntPtr(value);
+  if (machine()->Is64()) {
+    value = __ TruncateInt64ToInt32(value);
+  }
+  return value;
+}
+
 Node* EffectControlLinearizer::ObjectIsSmi(Node* value) {
-  return graph()->NewNode(
-      machine()->WordEqual(),
-      graph()->NewNode(machine()->WordAnd(), value,
-                       jsgraph()->IntPtrConstant(kSmiTagMask)),
-      jsgraph()->IntPtrConstant(kSmiTag));
+  return __ WordEqual(__ WordAnd(value, __ IntPtrConstant(kSmiTagMask)),
+                      __ IntPtrConstant(kSmiTag));
 }
 
 Node* EffectControlLinearizer::SmiMaxValueConstant() {
-  return jsgraph()->Int32Constant(Smi::kMaxValue);
+  return __ Int32Constant(Smi::kMaxValue);
 }
 
 Node* EffectControlLinearizer::SmiShiftBitsConstant() {
-  return jsgraph()->IntPtrConstant(kSmiShiftSize + kSmiTagSize);
+  return __ IntPtrConstant(kSmiShiftSize + kSmiTagSize);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerPlainPrimitiveToNumber(Node* node, Node* effect,
-                                                     Node* control) {
+Node* EffectControlLinearizer::LowerPlainPrimitiveToNumber(Node* node) {
   Node* value = node->InputAt(0);
-  Node* result = effect =
-      graph()->NewNode(ToNumberOperator(), jsgraph()->ToNumberBuiltinConstant(),
-                       value, jsgraph()->NoContextConstant(), effect);
-  return ValueEffectControl(result, effect, control);
+  return __ ToNumber(value);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerPlainPrimitiveToWord32(Node* node, Node* effect,
-                                                     Node* control) {
+Node* EffectControlLinearizer::LowerPlainPrimitiveToWord32(Node* node) {
   Node* value = node->InputAt(0);
+
+  auto if_not_smi = __ MakeDeferredLabel();
+  auto if_to_number_smi = __ MakeLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kWord32);
 
   Node* check0 = ObjectIsSmi(value);
-  Node* branch0 =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check0, control);
+  __ GotoIfNot(check0, &if_not_smi);
+  __ Goto(&done, ChangeSmiToInt32(value));
 
-  Node* if_true0 = graph()->NewNode(common()->IfTrue(), branch0);
-  Node* etrue0 = effect;
-  Node* vtrue0 = ChangeSmiToInt32(value);
+  __ Bind(&if_not_smi);
+  Node* to_number = __ ToNumber(value);
 
-  Node* if_false0 = graph()->NewNode(common()->IfFalse(), branch0);
-  Node* efalse0 = effect;
-  Node* vfalse0;
-  {
-    vfalse0 = efalse0 = graph()->NewNode(
-        ToNumberOperator(), jsgraph()->ToNumberBuiltinConstant(), value,
-        jsgraph()->NoContextConstant(), efalse0);
+  Node* check1 = ObjectIsSmi(to_number);
+  __ GotoIf(check1, &if_to_number_smi);
+  Node* number = __ LoadField(AccessBuilder::ForHeapNumberValue(), to_number);
+  __ Goto(&done, __ TruncateFloat64ToWord32(number));
 
-    Node* check1 = ObjectIsSmi(vfalse0);
-    Node* branch1 = graph()->NewNode(common()->Branch(), check1, if_false0);
+  __ Bind(&if_to_number_smi);
+  __ Goto(&done, ChangeSmiToInt32(to_number));
 
-    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-    Node* etrue1 = efalse0;
-    Node* vtrue1 = ChangeSmiToInt32(vfalse0);
-
-    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-    Node* efalse1 = efalse0;
-    Node* vfalse1;
-    {
-      vfalse1 = efalse1 = graph()->NewNode(
-          simplified()->LoadField(AccessBuilder::ForHeapNumberValue()), efalse0,
-          efalse1, if_false1);
-      vfalse1 = graph()->NewNode(machine()->TruncateFloat64ToWord32(), vfalse1);
-    }
-
-    if_false0 = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
-    efalse0 =
-        graph()->NewNode(common()->EffectPhi(2), etrue1, efalse1, if_false0);
-    vfalse0 = graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 2),
-                               vtrue1, vfalse1, if_false0);
-  }
-
-  control = graph()->NewNode(common()->Merge(2), if_true0, if_false0);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue0, efalse0, control);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kWord32, 2),
-                           vtrue0, vfalse0, control);
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerPlainPrimitiveToFloat64(Node* node, Node* effect,
-                                                      Node* control) {
+Node* EffectControlLinearizer::LowerPlainPrimitiveToFloat64(Node* node) {
   Node* value = node->InputAt(0);
 
+  auto if_not_smi = __ MakeDeferredLabel();
+  auto if_to_number_smi = __ MakeLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kFloat64);
+
   Node* check0 = ObjectIsSmi(value);
-  Node* branch0 =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check0, control);
+  __ GotoIfNot(check0, &if_not_smi);
+  Node* from_smi = ChangeSmiToInt32(value);
+  __ Goto(&done, __ ChangeInt32ToFloat64(from_smi));
 
-  Node* if_true0 = graph()->NewNode(common()->IfTrue(), branch0);
-  Node* etrue0 = effect;
-  Node* vtrue0;
-  {
-    vtrue0 = ChangeSmiToInt32(value);
-    vtrue0 = graph()->NewNode(machine()->ChangeInt32ToFloat64(), vtrue0);
-  }
+  __ Bind(&if_not_smi);
+  Node* to_number = __ ToNumber(value);
+  Node* check1 = ObjectIsSmi(to_number);
+  __ GotoIf(check1, &if_to_number_smi);
 
-  Node* if_false0 = graph()->NewNode(common()->IfFalse(), branch0);
-  Node* efalse0 = effect;
-  Node* vfalse0;
-  {
-    vfalse0 = efalse0 = graph()->NewNode(
-        ToNumberOperator(), jsgraph()->ToNumberBuiltinConstant(), value,
-        jsgraph()->NoContextConstant(), efalse0);
+  Node* number = __ LoadField(AccessBuilder::ForHeapNumberValue(), to_number);
+  __ Goto(&done, number);
 
-    Node* check1 = ObjectIsSmi(vfalse0);
-    Node* branch1 = graph()->NewNode(common()->Branch(), check1, if_false0);
+  __ Bind(&if_to_number_smi);
+  Node* number_from_smi = ChangeSmiToInt32(to_number);
+  number_from_smi = __ ChangeInt32ToFloat64(number_from_smi);
+  __ Goto(&done, number_from_smi);
 
-    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-    Node* etrue1 = efalse0;
-    Node* vtrue1;
-    {
-      vtrue1 = ChangeSmiToInt32(vfalse0);
-      vtrue1 = graph()->NewNode(machine()->ChangeInt32ToFloat64(), vtrue1);
-    }
-
-    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-    Node* efalse1 = efalse0;
-    Node* vfalse1;
-    {
-      vfalse1 = efalse1 = graph()->NewNode(
-          simplified()->LoadField(AccessBuilder::ForHeapNumberValue()), efalse0,
-          efalse1, if_false1);
-    }
-
-    if_false0 = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
-    efalse0 =
-        graph()->NewNode(common()->EffectPhi(2), etrue1, efalse1, if_false0);
-    vfalse0 =
-        graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2),
-                         vtrue1, vfalse1, if_false0);
-  }
-
-  control = graph()->NewNode(common()->Merge(2), if_true0, if_false0);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue0, efalse0, control);
-  value = graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2),
-                           vtrue0, vfalse0, control);
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerEnsureWritableFastElements(Node* node,
-                                                         Node* effect,
-                                                         Node* control) {
+Node* EffectControlLinearizer::LowerEnsureWritableFastElements(Node* node) {
   Node* object = node->InputAt(0);
   Node* elements = node->InputAt(1);
 
+  auto if_not_fixed_array = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kTagged);
+
   // Load the current map of {elements}.
-  Node* elements_map = effect =
-      graph()->NewNode(simplified()->LoadField(AccessBuilder::ForMap()),
-                       elements, effect, control);
+  Node* elements_map = __ LoadField(AccessBuilder::ForMap(), elements);
 
   // Check if {elements} is not a copy-on-write FixedArray.
-  Node* check = graph()->NewNode(machine()->WordEqual(), elements_map,
-                                 jsgraph()->FixedArrayMapConstant());
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check, control);
-
+  Node* check = __ WordEqual(elements_map, __ FixedArrayMapConstant());
+  __ GotoIfNot(check, &if_not_fixed_array);
   // Nothing to do if the {elements} are not copy-on-write.
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
-  Node* vtrue = elements;
+  __ Goto(&done, elements);
 
+  __ Bind(&if_not_fixed_array);
   // We need to take a copy of the {elements} and set them up for {object}.
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* efalse = effect;
-  Node* vfalse;
-  {
-    // We need to create a copy of the {elements} for {object}.
-    Operator::Properties properties = Operator::kEliminatable;
-    Callable callable = CodeFactory::CopyFastSmiOrObjectElements(isolate());
-    CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
-    CallDescriptor const* const desc = Linkage::GetStubCallDescriptor(
-        isolate(), graph()->zone(), callable.descriptor(), 0, flags,
-        properties);
-    vfalse = efalse = graph()->NewNode(
-        common()->Call(desc), jsgraph()->HeapConstant(callable.code()), object,
-        jsgraph()->NoContextConstant(), efalse);
-  }
+  Operator::Properties properties = Operator::kEliminatable;
+  Callable callable =
+      Builtins::CallableFor(isolate(), Builtins::kCopyFastSmiOrObjectElements);
+  CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(), 0, flags, properties);
+  Node* result = __ Call(call_descriptor, __ HeapConstant(callable.code()),
+                         object, __ NoContextConstant());
+  __ Goto(&done, result);
 
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, control);
-  Node* value = graph()->NewNode(
-      common()->Phi(MachineRepresentation::kTagged, 2), vtrue, vfalse, control);
-
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerMaybeGrowFastElements(Node* node,
-                                                    Node* frame_state,
-                                                    Node* effect,
-                                                    Node* control) {
-  GrowFastElementsFlags flags = GrowFastElementsFlagsOf(node->op());
+Node* EffectControlLinearizer::LowerMaybeGrowFastElements(Node* node,
+                                                          Node* frame_state) {
+  GrowFastElementsParameters params = GrowFastElementsParametersOf(node->op());
   Node* object = node->InputAt(0);
   Node* elements = node->InputAt(1);
   Node* index = node->InputAt(2);
-  Node* length = node->InputAt(3);
+  Node* elements_length = node->InputAt(3);
 
-  Node* check0 = graph()->NewNode((flags & GrowFastElementsFlag::kHoleyElements)
-                                      ? machine()->Uint32LessThanOrEqual()
-                                      : machine()->Word32Equal(),
-                                  length, index);
-  Node* branch0 = graph()->NewNode(common()->Branch(), check0, control);
+  auto done = __ MakeLabel(MachineRepresentation::kTagged);
+  auto if_grow = __ MakeDeferredLabel();
+  auto if_not_grow = __ MakeLabel();
 
-  Node* if_true0 = graph()->NewNode(common()->IfTrue(), branch0);
-  Node* etrue0 = effect;
-  Node* vtrue0 = elements;
-  {
-    // Load the length of the {elements} backing store.
-    Node* elements_length = etrue0 = graph()->NewNode(
-        simplified()->LoadField(AccessBuilder::ForFixedArrayLength()), elements,
-        etrue0, if_true0);
-    elements_length = ChangeSmiToInt32(elements_length);
+  // Check if we need to grow the {elements} backing store.
+  Node* check = __ Uint32LessThan(index, elements_length);
+  __ GotoIfNot(check, &if_grow);
+  __ Goto(&done, elements);
 
-    // Check if we need to grow the {elements} backing store.
-    Node* check1 =
-        graph()->NewNode(machine()->Uint32LessThan(), index, elements_length);
-    Node* branch1 =
-        graph()->NewNode(common()->Branch(BranchHint::kTrue), check1, if_true0);
+  __ Bind(&if_grow);
+  // We need to grow the {elements} for {object}.
+  Operator::Properties properties = Operator::kEliminatable;
+  Callable callable =
+      (params.mode() == GrowFastElementsMode::kDoubleElements)
+          ? Builtins::CallableFor(isolate(), Builtins::kGrowFastDoubleElements)
+          : Builtins::CallableFor(isolate(),
+                                  Builtins::kGrowFastSmiOrObjectElements);
+  CallDescriptor::Flags call_flags = CallDescriptor::kNoFlags;
+  auto call_descriptor = Linkage::GetStubCallDescriptor(
+      graph()->zone(), callable.descriptor(), 0, call_flags, properties);
+  Node* new_elements =
+      __ Call(call_descriptor, __ HeapConstant(callable.code()), object,
+              ChangeInt32ToSmi(index), __ NoContextConstant());
 
-    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-    Node* etrue1 = etrue0;
-    Node* vtrue1 = vtrue0;
+  // Ensure that we were able to grow the {elements}.
+  __ DeoptimizeIf(DeoptimizeReason::kCouldNotGrowElements, params.feedback(),
+                  ObjectIsSmi(new_elements), frame_state);
+  __ Goto(&done, new_elements);
 
-    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-    Node* efalse1 = etrue0;
-    Node* vfalse1 = vtrue0;
-    {
-      // We need to grow the {elements} for {object}.
-      Operator::Properties properties = Operator::kEliminatable;
-      Callable callable =
-          (flags & GrowFastElementsFlag::kDoubleElements)
-              ? CodeFactory::GrowFastDoubleElements(isolate())
-              : CodeFactory::GrowFastSmiOrObjectElements(isolate());
-      CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
-      CallDescriptor const* const desc = Linkage::GetStubCallDescriptor(
-          isolate(), graph()->zone(), callable.descriptor(), 0, flags,
-          properties);
-      vfalse1 = efalse1 = graph()->NewNode(
-          common()->Call(desc), jsgraph()->HeapConstant(callable.code()),
-          object, ChangeInt32ToSmi(index), jsgraph()->NoContextConstant(),
-          efalse1);
-
-      // Ensure that we were able to grow the {elements}.
-      // TODO(turbofan): We use kSmi as reason here similar to Crankshaft,
-      // but maybe we should just introduce a reason that makes sense.
-      efalse1 = if_false1 = graph()->NewNode(
-          common()->DeoptimizeIf(DeoptimizeReason::kSmi), ObjectIsSmi(vfalse1),
-          frame_state, efalse1, if_false1);
-    }
-
-    if_true0 = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
-    etrue0 =
-        graph()->NewNode(common()->EffectPhi(2), etrue1, efalse1, if_true0);
-    vtrue0 = graph()->NewNode(common()->Phi(MachineRepresentation::kTagged, 2),
-                              vtrue1, vfalse1, if_true0);
-
-    // For JSArray {object}s we also need to update the "length".
-    if (flags & GrowFastElementsFlag::kArrayObject) {
-      // Compute the new {length}.
-      Node* object_length = ChangeInt32ToSmi(graph()->NewNode(
-          machine()->Int32Add(), index, jsgraph()->Int32Constant(1)));
-
-      // Update the "length" property of the {object}.
-      etrue0 =
-          graph()->NewNode(simplified()->StoreField(
-                               AccessBuilder::ForJSArrayLength(FAST_ELEMENTS)),
-                           object, object_length, etrue0, if_true0);
-    }
-  }
-
-  Node* if_false0 = graph()->NewNode(common()->IfFalse(), branch0);
-  Node* efalse0 = effect;
-  Node* vfalse0 = elements;
-  {
-    // In case of non-holey {elements}, we need to verify that the {index} is
-    // in-bounds, otherwise for holey {elements}, the check above already
-    // guards the index (and the operator forces {index} to be unsigned).
-    if (!(flags & GrowFastElementsFlag::kHoleyElements)) {
-      Node* check1 =
-          graph()->NewNode(machine()->Uint32LessThan(), index, length);
-      efalse0 = if_false0 = graph()->NewNode(
-          common()->DeoptimizeUnless(DeoptimizeReason::kOutOfBounds), check1,
-          frame_state, efalse0, if_false0);
-    }
-  }
-
-  control = graph()->NewNode(common()->Merge(2), if_true0, if_false0);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue0, efalse0, control);
-  Node* value =
-      graph()->NewNode(common()->Phi(MachineRepresentation::kTagged, 2), vtrue0,
-                       vfalse0, control);
-
-  return ValueEffectControl(value, effect, control);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerTransitionElementsKind(Node* node, Node* effect,
-                                                     Node* control) {
+void EffectControlLinearizer::LowerTransitionElementsKind(Node* node) {
   ElementsTransition const transition = ElementsTransitionOf(node->op());
   Node* object = node->InputAt(0);
-  Node* source_map = node->InputAt(1);
-  Node* target_map = node->InputAt(2);
+
+  auto if_map_same = __ MakeDeferredLabel();
+  auto done = __ MakeLabel();
+
+  Node* source_map = __ HeapConstant(transition.source());
+  Node* target_map = __ HeapConstant(transition.target());
 
   // Load the current map of {object}.
-  Node* object_map = effect =
-      graph()->NewNode(simplified()->LoadField(AccessBuilder::ForMap()), object,
-                       effect, control);
+  Node* object_map = __ LoadField(AccessBuilder::ForMap(), object);
 
   // Check if {object_map} is the same as {source_map}.
-  Node* check =
-      graph()->NewNode(machine()->WordEqual(), object_map, source_map);
-  Node* branch =
-      graph()->NewNode(common()->Branch(BranchHint::kFalse), check, control);
+  Node* check = __ WordEqual(object_map, source_map);
+  __ GotoIf(check, &if_map_same);
+  __ Goto(&done);
 
-  // Migrate the {object} from {source_map} to {target_map}.
-  Node* if_true = graph()->NewNode(common()->IfTrue(), branch);
-  Node* etrue = effect;
+  __ Bind(&if_map_same);
+  switch (transition.mode()) {
+    case ElementsTransition::kFastTransition:
+      // In-place migration of {object}, just store the {target_map}.
+      __ StoreField(AccessBuilder::ForMap(), object, target_map);
+      break;
+    case ElementsTransition::kSlowTransition: {
+      // Instance migration, call out to the runtime for {object}.
+      Operator::Properties properties = Operator::kNoDeopt | Operator::kNoThrow;
+      Runtime::FunctionId id = Runtime::kTransitionElementsKind;
+      auto call_descriptor = Linkage::GetRuntimeCallDescriptor(
+          graph()->zone(), id, 2, properties, CallDescriptor::kNoFlags);
+      __ Call(call_descriptor, __ CEntryStubConstant(1), object, target_map,
+              __ ExternalConstant(ExternalReference::Create(id)),
+              __ Int32Constant(2), __ NoContextConstant());
+      break;
+    }
+  }
+  __ Goto(&done);
+
+  __ Bind(&done);
+}
+
+Node* EffectControlLinearizer::LowerLoadFieldByIndex(Node* node) {
+  Node* object = node->InputAt(0);
+  Node* index = node->InputAt(1);
+  Node* zero = __ IntPtrConstant(0);
+  Node* one = __ IntPtrConstant(1);
+
+  // Sign-extend the {index} on 64-bit architectures.
+  if (machine()->Is64()) {
+    index = __ ChangeInt32ToInt64(index);
+  }
+
+  auto if_double = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kTagged);
+
+  // Check if field is a mutable double field.
+  __ GotoIfNot(__ WordEqual(__ WordAnd(index, one), zero), &if_double);
+
+  // The field is a proper Tagged field on {object}. The {index} is shifted
+  // to the left by one in the code below.
   {
-    switch (transition) {
-      case ElementsTransition::kFastTransition: {
-        // In-place migration of {object}, just store the {target_map}.
-        etrue =
-            graph()->NewNode(simplified()->StoreField(AccessBuilder::ForMap()),
-                             object, target_map, etrue, if_true);
-        break;
-      }
-      case ElementsTransition::kSlowTransition: {
-        // Instance migration, call out to the runtime for {object}.
-        Operator::Properties properties =
-            Operator::kNoDeopt | Operator::kNoThrow;
-        Runtime::FunctionId id = Runtime::kTransitionElementsKind;
-        CallDescriptor const* desc = Linkage::GetRuntimeCallDescriptor(
-            graph()->zone(), id, 2, properties, CallDescriptor::kNoFlags);
-        etrue = graph()->NewNode(
-            common()->Call(desc), jsgraph()->CEntryStubConstant(1), object,
-            target_map,
-            jsgraph()->ExternalConstant(ExternalReference(id, isolate())),
-            jsgraph()->Int32Constant(2), jsgraph()->NoContextConstant(), etrue,
-            if_true);
-        break;
-      }
+    // Check if field is in-object or out-of-object.
+    auto if_outofobject = __ MakeLabel();
+    __ GotoIf(__ IntLessThan(index, zero), &if_outofobject);
+
+    // The field is located in the {object} itself.
+    {
+      Node* offset =
+          __ IntAdd(__ WordShl(index, __ IntPtrConstant(kPointerSizeLog2 - 1)),
+                    __ IntPtrConstant(JSObject::kHeaderSize - kHeapObjectTag));
+      Node* result = __ Load(MachineType::AnyTagged(), object, offset);
+      __ Goto(&done, result);
+    }
+
+    // The field is located in the properties backing store of {object}.
+    // The {index} is equal to the negated out of property index plus 1.
+    __ Bind(&if_outofobject);
+    {
+      Node* properties =
+          __ LoadField(AccessBuilder::ForJSObjectPropertiesOrHash(), object);
+      Node* offset =
+          __ IntAdd(__ WordShl(__ IntSub(zero, index),
+                               __ IntPtrConstant(kPointerSizeLog2 - 1)),
+                    __ IntPtrConstant((FixedArray::kHeaderSize - kPointerSize) -
+                                      kHeapObjectTag));
+      Node* result = __ Load(MachineType::AnyTagged(), properties, offset);
+      __ Goto(&done, result);
     }
   }
 
-  // Nothing to do if the {object} doesn't have the {source_map}.
-  Node* if_false = graph()->NewNode(common()->IfFalse(), branch);
-  Node* efalse = effect;
+  // The field is a Double field, either unboxed in the object on 64-bit
+  // architectures, or as MutableHeapNumber.
+  __ Bind(&if_double);
+  {
+    auto done_double = __ MakeLabel(MachineRepresentation::kFloat64);
 
-  control = graph()->NewNode(common()->Merge(2), if_true, if_false);
-  effect = graph()->NewNode(common()->EffectPhi(2), etrue, efalse, control);
+    index = __ WordSar(index, one);
 
-  return ValueEffectControl(nullptr, effect, control);
+    // Check if field is in-object or out-of-object.
+    auto if_outofobject = __ MakeLabel();
+    __ GotoIf(__ IntLessThan(index, zero), &if_outofobject);
+
+    // The field is located in the {object} itself.
+    {
+      Node* offset =
+          __ IntAdd(__ WordShl(index, __ IntPtrConstant(kPointerSizeLog2)),
+                    __ IntPtrConstant(JSObject::kHeaderSize - kHeapObjectTag));
+      if (FLAG_unbox_double_fields) {
+        Node* result = __ Load(MachineType::Float64(), object, offset);
+        __ Goto(&done_double, result);
+      } else {
+        Node* result = __ Load(MachineType::AnyTagged(), object, offset);
+        result = __ LoadField(AccessBuilder::ForHeapNumberValue(), result);
+        __ Goto(&done_double, result);
+      }
+    }
+
+    __ Bind(&if_outofobject);
+    {
+      Node* properties =
+          __ LoadField(AccessBuilder::ForJSObjectPropertiesOrHash(), object);
+      Node* offset =
+          __ IntAdd(__ WordShl(__ IntSub(zero, index),
+                               __ IntPtrConstant(kPointerSizeLog2)),
+                    __ IntPtrConstant((FixedArray::kHeaderSize - kPointerSize) -
+                                      kHeapObjectTag));
+      Node* result = __ Load(MachineType::AnyTagged(), properties, offset);
+      result = __ LoadField(AccessBuilder::ForHeapNumberValue(), result);
+      __ Goto(&done_double, result);
+    }
+
+    __ Bind(&done_double);
+    {
+      Node* result = AllocateHeapNumberWithValue(done_double.PhiAt(0));
+      __ Goto(&done, result);
+    }
+  }
+
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerLoadTypedElement(Node* node, Node* effect,
-                                               Node* control) {
+Node* EffectControlLinearizer::BuildReverseBytes(ExternalArrayType type,
+                                                 Node* value) {
+  switch (type) {
+    case kExternalInt8Array:
+    case kExternalUint8Array:
+    case kExternalUint8ClampedArray:
+      return value;
+
+    case kExternalInt16Array: {
+      Node* result = __ Word32ReverseBytes(value);
+      result = __ Word32Sar(result, __ Int32Constant(16));
+      return result;
+    }
+
+    case kExternalUint16Array: {
+      Node* result = __ Word32ReverseBytes(value);
+      result = __ Word32Shr(result, __ Int32Constant(16));
+      return result;
+    }
+
+    case kExternalInt32Array:  // Fall through.
+    case kExternalUint32Array:
+      return __ Word32ReverseBytes(value);
+
+    case kExternalFloat32Array: {
+      Node* result = __ BitcastFloat32ToInt32(value);
+      result = __ Word32ReverseBytes(result);
+      result = __ BitcastInt32ToFloat32(result);
+      return result;
+    }
+
+    case kExternalFloat64Array: {
+      if (machine()->Is64()) {
+        Node* result = __ BitcastFloat64ToInt64(value);
+        result = __ Word64ReverseBytes(result);
+        result = __ BitcastInt64ToFloat64(result);
+        return result;
+      } else {
+        Node* lo = __ Word32ReverseBytes(__ Float64ExtractLowWord32(value));
+        Node* hi = __ Word32ReverseBytes(__ Float64ExtractHighWord32(value));
+        Node* result = __ Float64Constant(0.0);
+        result = __ Float64InsertLowWord32(result, hi);
+        result = __ Float64InsertHighWord32(result, lo);
+        return result;
+      }
+    }
+
+    case kExternalBigInt64Array:
+    case kExternalBigUint64Array:
+      UNREACHABLE();
+  }
+}
+
+Node* EffectControlLinearizer::LowerLoadDataViewElement(Node* node) {
+  ExternalArrayType element_type = ExternalArrayTypeOf(node->op());
+  Node* buffer = node->InputAt(0);
+  Node* storage = node->InputAt(1);
+  Node* index = node->InputAt(2);
+  Node* is_little_endian = node->InputAt(3);
+
+  // On 64-bit platforms, we need to feed a Word64 index to the Load and
+  // Store operators.
+  if (machine()->Is64()) {
+    index = __ ChangeUint32ToUint64(index);
+  }
+
+  // We need to keep the {buffer} alive so that the GC will not release the
+  // ArrayBuffer (if there's any) as long as we are still operating on it.
+  __ Retain(buffer);
+
+  MachineType const machine_type =
+      AccessBuilder::ForTypedArrayElement(element_type, true).machine_type;
+
+  Node* value = __ LoadUnaligned(machine_type, storage, index);
+  auto big_endian = __ MakeLabel();
+  auto done = __ MakeLabel(machine_type.representation());
+
+  __ GotoIfNot(is_little_endian, &big_endian);
+  {  // Little-endian load.
+#if V8_TARGET_LITTLE_ENDIAN
+    __ Goto(&done, value);
+#else
+    __ Goto(&done, BuildReverseBytes(element_type, value));
+#endif  // V8_TARGET_LITTLE_ENDIAN
+  }
+
+  __ Bind(&big_endian);
+  {  // Big-endian load.
+#if V8_TARGET_LITTLE_ENDIAN
+    __ Goto(&done, BuildReverseBytes(element_type, value));
+#else
+    __ Goto(&done, value);
+#endif  // V8_TARGET_LITTLE_ENDIAN
+  }
+
+  // We're done, return {result}.
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+void EffectControlLinearizer::LowerStoreDataViewElement(Node* node) {
+  ExternalArrayType element_type = ExternalArrayTypeOf(node->op());
+  Node* buffer = node->InputAt(0);
+  Node* storage = node->InputAt(1);
+  Node* index = node->InputAt(2);
+  Node* value = node->InputAt(3);
+  Node* is_little_endian = node->InputAt(4);
+
+  // On 64-bit platforms, we need to feed a Word64 index to the Load and
+  // Store operators.
+  if (machine()->Is64()) {
+    index = __ ChangeUint32ToUint64(index);
+  }
+
+  // We need to keep the {buffer} alive so that the GC will not release the
+  // ArrayBuffer (if there's any) as long as we are still operating on it.
+  __ Retain(buffer);
+
+  MachineType const machine_type =
+      AccessBuilder::ForTypedArrayElement(element_type, true).machine_type;
+
+  auto big_endian = __ MakeLabel();
+  auto done = __ MakeLabel(machine_type.representation());
+
+  __ GotoIfNot(is_little_endian, &big_endian);
+  {  // Little-endian store.
+#if V8_TARGET_LITTLE_ENDIAN
+    __ Goto(&done, value);
+#else
+    __ Goto(&done, BuildReverseBytes(element_type, value));
+#endif  // V8_TARGET_LITTLE_ENDIAN
+  }
+
+  __ Bind(&big_endian);
+  {  // Big-endian store.
+#if V8_TARGET_LITTLE_ENDIAN
+    __ Goto(&done, BuildReverseBytes(element_type, value));
+#else
+    __ Goto(&done, value);
+#endif  // V8_TARGET_LITTLE_ENDIAN
+  }
+
+  __ Bind(&done);
+  __ StoreUnaligned(machine_type.representation(), storage, index,
+                    done.PhiAt(0));
+}
+
+Node* EffectControlLinearizer::LowerLoadTypedElement(Node* node) {
   ExternalArrayType array_type = ExternalArrayTypeOf(node->op());
   Node* buffer = node->InputAt(0);
   Node* base = node->InputAt(1);
@@ -2844,24 +3926,22 @@ EffectControlLinearizer::LowerLoadTypedElement(Node* node, Node* effect,
 
   // We need to keep the {buffer} alive so that the GC will not release the
   // ArrayBuffer (if there's any) as long as we are still operating on it.
-  effect = graph()->NewNode(common()->Retain(), buffer, effect);
+  __ Retain(buffer);
 
-  // Compute the effective storage pointer.
-  Node* storage = effect = graph()->NewNode(machine()->UnsafePointerAdd(), base,
-                                            external, effect, control);
+  // Compute the effective storage pointer, handling the case where the
+  // {external} pointer is the effective storage pointer (i.e. the {base}
+  // is Smi zero).
+  Node* storage = IntPtrMatcher(base).Is(0)
+                      ? external
+                      : __ UnsafePointerAdd(base, external);
 
   // Perform the actual typed element access.
-  Node* value = effect = graph()->NewNode(
-      simplified()->LoadElement(
-          AccessBuilder::ForTypedArrayElement(array_type, true)),
-      storage, index, effect, control);
-
-  return ValueEffectControl(value, effect, control);
+  return __ LoadElement(AccessBuilder::ForTypedArrayElement(
+                            array_type, true, LoadSensitivity::kCritical),
+                        storage, index);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerStoreTypedElement(Node* node, Node* effect,
-                                                Node* control) {
+void EffectControlLinearizer::LowerStoreTypedElement(Node* node) {
   ExternalArrayType array_type = ExternalArrayTypeOf(node->op());
   Node* buffer = node->InputAt(0);
   Node* base = node->InputAt(1);
@@ -2871,34 +3951,482 @@ EffectControlLinearizer::LowerStoreTypedElement(Node* node, Node* effect,
 
   // We need to keep the {buffer} alive so that the GC will not release the
   // ArrayBuffer (if there's any) as long as we are still operating on it.
-  effect = graph()->NewNode(common()->Retain(), buffer, effect);
+  __ Retain(buffer);
 
-  // Compute the effective storage pointer.
-  Node* storage = effect = graph()->NewNode(machine()->UnsafePointerAdd(), base,
-                                            external, effect, control);
+  // Compute the effective storage pointer, handling the case where the
+  // {external} pointer is the effective storage pointer (i.e. the {base}
+  // is Smi zero).
+  Node* storage = IntPtrMatcher(base).Is(0)
+                      ? external
+                      : __ UnsafePointerAdd(base, external);
 
   // Perform the actual typed element access.
-  effect = graph()->NewNode(
-      simplified()->StoreElement(
-          AccessBuilder::ForTypedArrayElement(array_type, true)),
-      storage, index, value, effect, control);
-
-  return ValueEffectControl(nullptr, effect, control);
+  __ StoreElement(AccessBuilder::ForTypedArrayElement(array_type, true),
+                  storage, index, value);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerFloat64RoundUp(Node* node, Node* effect,
-                                             Node* control) {
-  // Nothing to be done if a fast hardware instruction is available.
-  if (machine()->Float64RoundUp().IsSupported()) {
-    return ValueEffectControl(node, effect, control);
+void EffectControlLinearizer::TransitionElementsTo(Node* node, Node* array,
+                                                   ElementsKind from,
+                                                   ElementsKind to) {
+  DCHECK(IsMoreGeneralElementsKindTransition(from, to));
+  DCHECK(to == HOLEY_ELEMENTS || to == HOLEY_DOUBLE_ELEMENTS);
+
+  Handle<Map> target(to == HOLEY_ELEMENTS ? FastMapParameterOf(node->op())
+                                          : DoubleMapParameterOf(node->op()));
+  Node* target_map = __ HeapConstant(target);
+
+  if (IsSimpleMapChangeTransition(from, to)) {
+    __ StoreField(AccessBuilder::ForMap(), array, target_map);
+  } else {
+    // Instance migration, call out to the runtime for {array}.
+    Operator::Properties properties = Operator::kNoDeopt | Operator::kNoThrow;
+    Runtime::FunctionId id = Runtime::kTransitionElementsKind;
+    auto call_descriptor = Linkage::GetRuntimeCallDescriptor(
+        graph()->zone(), id, 2, properties, CallDescriptor::kNoFlags);
+    __ Call(call_descriptor, __ CEntryStubConstant(1), array, target_map,
+            __ ExternalConstant(ExternalReference::Create(id)),
+            __ Int32Constant(2), __ NoContextConstant());
+  }
+}
+
+Node* EffectControlLinearizer::IsElementsKindGreaterThan(
+    Node* kind, ElementsKind reference_kind) {
+  Node* ref_kind = __ Int32Constant(reference_kind);
+  Node* ret = __ Int32LessThan(ref_kind, kind);
+  return ret;
+}
+
+void EffectControlLinearizer::LowerTransitionAndStoreElement(Node* node) {
+  Node* array = node->InputAt(0);
+  Node* index = node->InputAt(1);
+  Node* value = node->InputAt(2);
+
+  // Possibly transition array based on input and store.
+  //
+  //   -- TRANSITION PHASE -----------------
+  //   kind = ElementsKind(array)
+  //   if value is not smi {
+  //     if kind == HOLEY_SMI_ELEMENTS {
+  //       if value is heap number {
+  //         Transition array to HOLEY_DOUBLE_ELEMENTS
+  //         kind = HOLEY_DOUBLE_ELEMENTS
+  //       } else {
+  //         Transition array to HOLEY_ELEMENTS
+  //         kind = HOLEY_ELEMENTS
+  //       }
+  //     } else if kind == HOLEY_DOUBLE_ELEMENTS {
+  //       if value is not heap number {
+  //         Transition array to HOLEY_ELEMENTS
+  //         kind = HOLEY_ELEMENTS
+  //       }
+  //     }
+  //   }
+  //
+  //   -- STORE PHASE ----------------------
+  //   [make sure {kind} is up-to-date]
+  //   if kind == HOLEY_DOUBLE_ELEMENTS {
+  //     if value is smi {
+  //       float_value = convert smi to float
+  //       Store array[index] = float_value
+  //     } else {
+  //       float_value = value
+  //       Store array[index] = float_value
+  //     }
+  //   } else {
+  //     // kind is HOLEY_SMI_ELEMENTS or HOLEY_ELEMENTS
+  //     Store array[index] = value
+  //   }
+  //
+  Node* map = __ LoadField(AccessBuilder::ForMap(), array);
+  Node* kind;
+  {
+    Node* bit_field2 = __ LoadField(AccessBuilder::ForMapBitField2(), map);
+    Node* mask = __ Int32Constant(Map::ElementsKindBits::kMask);
+    Node* andit = __ Word32And(bit_field2, mask);
+    Node* shift = __ Int32Constant(Map::ElementsKindBits::kShift);
+    kind = __ Word32Shr(andit, shift);
   }
 
-  Node* const one = jsgraph()->Float64Constant(1.0);
-  Node* const zero = jsgraph()->Float64Constant(0.0);
-  Node* const minus_zero = jsgraph()->Float64Constant(-0.0);
-  Node* const two_52 = jsgraph()->Float64Constant(4503599627370496.0E0);
-  Node* const minus_two_52 = jsgraph()->Float64Constant(-4503599627370496.0E0);
+  auto do_store = __ MakeLabel(MachineRepresentation::kWord32);
+  // We can store a smi anywhere.
+  __ GotoIf(ObjectIsSmi(value), &do_store, kind);
+
+  // {value} is a HeapObject.
+  auto transition_smi_array = __ MakeDeferredLabel();
+  auto transition_double_to_fast = __ MakeDeferredLabel();
+  {
+    __ GotoIfNot(IsElementsKindGreaterThan(kind, HOLEY_SMI_ELEMENTS),
+                 &transition_smi_array);
+    __ GotoIfNot(IsElementsKindGreaterThan(kind, HOLEY_ELEMENTS), &do_store,
+                 kind);
+
+    // We have double elements kind. Only a HeapNumber can be stored
+    // without effecting a transition.
+    Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+    Node* heap_number_map = __ HeapNumberMapConstant();
+    Node* check = __ WordEqual(value_map, heap_number_map);
+    __ GotoIfNot(check, &transition_double_to_fast);
+    __ Goto(&do_store, kind);
+  }
+
+  __ Bind(&transition_smi_array);  // deferred code.
+  {
+    // Transition {array} from HOLEY_SMI_ELEMENTS to HOLEY_DOUBLE_ELEMENTS or
+    // to HOLEY_ELEMENTS.
+    auto if_value_not_heap_number = __ MakeLabel();
+    Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+    Node* heap_number_map = __ HeapNumberMapConstant();
+    Node* check = __ WordEqual(value_map, heap_number_map);
+    __ GotoIfNot(check, &if_value_not_heap_number);
+    {
+      // {value} is a HeapNumber.
+      TransitionElementsTo(node, array, HOLEY_SMI_ELEMENTS,
+                           HOLEY_DOUBLE_ELEMENTS);
+      __ Goto(&do_store, __ Int32Constant(HOLEY_DOUBLE_ELEMENTS));
+    }
+    __ Bind(&if_value_not_heap_number);
+    {
+      TransitionElementsTo(node, array, HOLEY_SMI_ELEMENTS, HOLEY_ELEMENTS);
+      __ Goto(&do_store, __ Int32Constant(HOLEY_ELEMENTS));
+    }
+  }
+
+  __ Bind(&transition_double_to_fast);  // deferred code.
+  {
+    TransitionElementsTo(node, array, HOLEY_DOUBLE_ELEMENTS, HOLEY_ELEMENTS);
+    __ Goto(&do_store, __ Int32Constant(HOLEY_ELEMENTS));
+  }
+
+  // Make sure kind is up-to-date.
+  __ Bind(&do_store);
+  kind = do_store.PhiAt(0);
+
+  Node* elements = __ LoadField(AccessBuilder::ForJSObjectElements(), array);
+  auto if_kind_is_double = __ MakeLabel();
+  auto done = __ MakeLabel();
+  __ GotoIf(IsElementsKindGreaterThan(kind, HOLEY_ELEMENTS),
+            &if_kind_is_double);
+  {
+    // Our ElementsKind is HOLEY_SMI_ELEMENTS or HOLEY_ELEMENTS.
+    __ StoreElement(AccessBuilder::ForFixedArrayElement(HOLEY_ELEMENTS),
+                    elements, index, value);
+    __ Goto(&done);
+  }
+  __ Bind(&if_kind_is_double);
+  {
+    // Our ElementsKind is HOLEY_DOUBLE_ELEMENTS.
+    auto do_double_store = __ MakeLabel();
+    __ GotoIfNot(ObjectIsSmi(value), &do_double_store);
+    {
+      Node* int_value = ChangeSmiToInt32(value);
+      Node* float_value = __ ChangeInt32ToFloat64(int_value);
+      __ StoreElement(AccessBuilder::ForFixedDoubleArrayElement(), elements,
+                      index, float_value);
+      __ Goto(&done);
+    }
+    __ Bind(&do_double_store);
+    {
+      Node* float_value =
+          __ LoadField(AccessBuilder::ForHeapNumberValue(), value);
+      __ StoreElement(AccessBuilder::ForFixedDoubleArrayElement(), elements,
+                      index, float_value);
+      __ Goto(&done);
+    }
+  }
+
+  __ Bind(&done);
+}
+
+void EffectControlLinearizer::LowerTransitionAndStoreNumberElement(Node* node) {
+  Node* array = node->InputAt(0);
+  Node* index = node->InputAt(1);
+  Node* value = node->InputAt(2);  // This is a Float64, not tagged.
+
+  // Possibly transition array based on input and store.
+  //
+  //   -- TRANSITION PHASE -----------------
+  //   kind = ElementsKind(array)
+  //   if kind == HOLEY_SMI_ELEMENTS {
+  //     Transition array to HOLEY_DOUBLE_ELEMENTS
+  //   } else if kind != HOLEY_DOUBLE_ELEMENTS {
+  //     This is UNREACHABLE, execute a debug break.
+  //   }
+  //
+  //   -- STORE PHASE ----------------------
+  //   Store array[index] = value (it's a float)
+  //
+  Node* map = __ LoadField(AccessBuilder::ForMap(), array);
+  Node* kind;
+  {
+    Node* bit_field2 = __ LoadField(AccessBuilder::ForMapBitField2(), map);
+    Node* mask = __ Int32Constant(Map::ElementsKindBits::kMask);
+    Node* andit = __ Word32And(bit_field2, mask);
+    Node* shift = __ Int32Constant(Map::ElementsKindBits::kShift);
+    kind = __ Word32Shr(andit, shift);
+  }
+
+  auto do_store = __ MakeLabel();
+
+  // {value} is a float64.
+  auto transition_smi_array = __ MakeDeferredLabel();
+  {
+    __ GotoIfNot(IsElementsKindGreaterThan(kind, HOLEY_SMI_ELEMENTS),
+                 &transition_smi_array);
+    // We expect that our input array started at HOLEY_SMI_ELEMENTS, and
+    // climbs the lattice up to HOLEY_DOUBLE_ELEMENTS. Force a debug break
+    // if this assumption is broken. It also would be the case that
+    // loop peeling can break this assumption.
+    __ GotoIf(__ Word32Equal(kind, __ Int32Constant(HOLEY_DOUBLE_ELEMENTS)),
+              &do_store);
+    // TODO(turbofan): It would be good to have an "Unreachable()" node type.
+    __ DebugBreak();
+    __ Goto(&do_store);
+  }
+
+  __ Bind(&transition_smi_array);  // deferred code.
+  {
+    // Transition {array} from HOLEY_SMI_ELEMENTS to HOLEY_DOUBLE_ELEMENTS.
+    TransitionElementsTo(node, array, HOLEY_SMI_ELEMENTS,
+                         HOLEY_DOUBLE_ELEMENTS);
+    __ Goto(&do_store);
+  }
+
+  __ Bind(&do_store);
+
+  Node* elements = __ LoadField(AccessBuilder::ForJSObjectElements(), array);
+  __ StoreElement(AccessBuilder::ForFixedDoubleArrayElement(), elements, index,
+                  value);
+}
+
+void EffectControlLinearizer::LowerTransitionAndStoreNonNumberElement(
+    Node* node) {
+  Node* array = node->InputAt(0);
+  Node* index = node->InputAt(1);
+  Node* value = node->InputAt(2);
+
+  // Possibly transition array based on input and store.
+  //
+  //   -- TRANSITION PHASE -----------------
+  //   kind = ElementsKind(array)
+  //   if kind == HOLEY_SMI_ELEMENTS {
+  //     Transition array to HOLEY_ELEMENTS
+  //   } else if kind == HOLEY_DOUBLE_ELEMENTS {
+  //     Transition array to HOLEY_ELEMENTS
+  //   }
+  //
+  //   -- STORE PHASE ----------------------
+  //   // kind is HOLEY_ELEMENTS
+  //   Store array[index] = value
+  //
+  Node* map = __ LoadField(AccessBuilder::ForMap(), array);
+  Node* kind;
+  {
+    Node* bit_field2 = __ LoadField(AccessBuilder::ForMapBitField2(), map);
+    Node* mask = __ Int32Constant(Map::ElementsKindBits::kMask);
+    Node* andit = __ Word32And(bit_field2, mask);
+    Node* shift = __ Int32Constant(Map::ElementsKindBits::kShift);
+    kind = __ Word32Shr(andit, shift);
+  }
+
+  auto do_store = __ MakeLabel();
+
+  auto transition_smi_array = __ MakeDeferredLabel();
+  auto transition_double_to_fast = __ MakeDeferredLabel();
+  {
+    __ GotoIfNot(IsElementsKindGreaterThan(kind, HOLEY_SMI_ELEMENTS),
+                 &transition_smi_array);
+    __ GotoIf(IsElementsKindGreaterThan(kind, HOLEY_ELEMENTS),
+              &transition_double_to_fast);
+    __ Goto(&do_store);
+  }
+
+  __ Bind(&transition_smi_array);  // deferred code.
+  {
+    // Transition {array} from HOLEY_SMI_ELEMENTS to HOLEY_ELEMENTS.
+    TransitionElementsTo(node, array, HOLEY_SMI_ELEMENTS, HOLEY_ELEMENTS);
+    __ Goto(&do_store);
+  }
+
+  __ Bind(&transition_double_to_fast);  // deferred code.
+  {
+    TransitionElementsTo(node, array, HOLEY_DOUBLE_ELEMENTS, HOLEY_ELEMENTS);
+    __ Goto(&do_store);
+  }
+
+  __ Bind(&do_store);
+
+  Node* elements = __ LoadField(AccessBuilder::ForJSObjectElements(), array);
+  // Our ElementsKind is HOLEY_ELEMENTS.
+  ElementAccess access = AccessBuilder::ForFixedArrayElement(HOLEY_ELEMENTS);
+  Type value_type = ValueTypeParameterOf(node->op());
+  if (value_type.Is(Type::BooleanOrNullOrUndefined())) {
+    access.type = value_type;
+    access.write_barrier_kind = kNoWriteBarrier;
+  }
+  __ StoreElement(access, elements, index, value);
+}
+
+void EffectControlLinearizer::LowerStoreSignedSmallElement(Node* node) {
+  Node* array = node->InputAt(0);
+  Node* index = node->InputAt(1);
+  Node* value = node->InputAt(2);  // int32
+
+  // Store a signed small in an output array.
+  //
+  //   kind = ElementsKind(array)
+  //
+  //   -- STORE PHASE ----------------------
+  //   if kind == HOLEY_DOUBLE_ELEMENTS {
+  //     float_value = convert int32 to float
+  //     Store array[index] = float_value
+  //   } else {
+  //     // kind is HOLEY_SMI_ELEMENTS or HOLEY_ELEMENTS
+  //     smi_value = convert int32 to smi
+  //     Store array[index] = smi_value
+  //   }
+  //
+  Node* map = __ LoadField(AccessBuilder::ForMap(), array);
+  Node* kind;
+  {
+    Node* bit_field2 = __ LoadField(AccessBuilder::ForMapBitField2(), map);
+    Node* mask = __ Int32Constant(Map::ElementsKindBits::kMask);
+    Node* andit = __ Word32And(bit_field2, mask);
+    Node* shift = __ Int32Constant(Map::ElementsKindBits::kShift);
+    kind = __ Word32Shr(andit, shift);
+  }
+
+  Node* elements = __ LoadField(AccessBuilder::ForJSObjectElements(), array);
+  auto if_kind_is_double = __ MakeLabel();
+  auto done = __ MakeLabel();
+  __ GotoIf(IsElementsKindGreaterThan(kind, HOLEY_ELEMENTS),
+            &if_kind_is_double);
+  {
+    // Our ElementsKind is HOLEY_SMI_ELEMENTS or HOLEY_ELEMENTS.
+    // In this case, we know our value is a signed small, and we can optimize
+    // the ElementAccess information.
+    ElementAccess access = AccessBuilder::ForFixedArrayElement();
+    access.type = Type::SignedSmall();
+    access.machine_type = MachineType::TaggedSigned();
+    access.write_barrier_kind = kNoWriteBarrier;
+    Node* smi_value = ChangeInt32ToSmi(value);
+    __ StoreElement(access, elements, index, smi_value);
+    __ Goto(&done);
+  }
+  __ Bind(&if_kind_is_double);
+  {
+    // Our ElementsKind is HOLEY_DOUBLE_ELEMENTS.
+    Node* float_value = __ ChangeInt32ToFloat64(value);
+    __ StoreElement(AccessBuilder::ForFixedDoubleArrayElement(), elements,
+                    index, float_value);
+    __ Goto(&done);
+  }
+
+  __ Bind(&done);
+}
+
+void EffectControlLinearizer::LowerRuntimeAbort(Node* node) {
+  AbortReason reason = AbortReasonOf(node->op());
+  Operator::Properties properties = Operator::kNoDeopt | Operator::kNoThrow;
+  Runtime::FunctionId id = Runtime::kAbort;
+  auto call_descriptor = Linkage::GetRuntimeCallDescriptor(
+      graph()->zone(), id, 1, properties, CallDescriptor::kNoFlags);
+  __ Call(call_descriptor, __ CEntryStubConstant(1),
+          jsgraph()->SmiConstant(static_cast<int>(reason)),
+          __ ExternalConstant(ExternalReference::Create(id)),
+          __ Int32Constant(1), __ NoContextConstant());
+}
+
+Node* EffectControlLinearizer::LowerConvertReceiver(Node* node) {
+  ConvertReceiverMode const mode = ConvertReceiverModeOf(node->op());
+  Node* value = node->InputAt(0);
+  Node* global_proxy = node->InputAt(1);
+
+  switch (mode) {
+    case ConvertReceiverMode::kNullOrUndefined: {
+      return global_proxy;
+    }
+    case ConvertReceiverMode::kNotNullOrUndefined: {
+      auto convert_to_object = __ MakeDeferredLabel();
+      auto done_convert = __ MakeLabel(MachineRepresentation::kTagged);
+
+      // Check if {value} is already a JSReceiver.
+      __ GotoIf(ObjectIsSmi(value), &convert_to_object);
+      STATIC_ASSERT(LAST_TYPE == LAST_JS_RECEIVER_TYPE);
+      Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+      Node* value_instance_type =
+          __ LoadField(AccessBuilder::ForMapInstanceType(), value_map);
+      Node* check = __ Uint32LessThan(
+          value_instance_type, __ Uint32Constant(FIRST_JS_RECEIVER_TYPE));
+      __ GotoIf(check, &convert_to_object);
+      __ Goto(&done_convert, value);
+
+      // Wrap the primitive {value} into a JSValue.
+      __ Bind(&convert_to_object);
+      Operator::Properties properties = Operator::kEliminatable;
+      Callable callable = Builtins::CallableFor(isolate(), Builtins::kToObject);
+      CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
+      auto call_descriptor = Linkage::GetStubCallDescriptor(
+          graph()->zone(), callable.descriptor(), 0, flags, properties);
+      Node* native_context = __ LoadField(
+          AccessBuilder::ForJSGlobalProxyNativeContext(), global_proxy);
+      Node* result = __ Call(call_descriptor, __ HeapConstant(callable.code()),
+                             value, native_context);
+      __ Goto(&done_convert, result);
+
+      __ Bind(&done_convert);
+      return done_convert.PhiAt(0);
+    }
+    case ConvertReceiverMode::kAny: {
+      auto convert_to_object = __ MakeDeferredLabel();
+      auto convert_global_proxy = __ MakeDeferredLabel();
+      auto done_convert = __ MakeLabel(MachineRepresentation::kTagged);
+
+      // Check if {value} is already a JSReceiver, or null/undefined.
+      __ GotoIf(ObjectIsSmi(value), &convert_to_object);
+      STATIC_ASSERT(LAST_TYPE == LAST_JS_RECEIVER_TYPE);
+      Node* value_map = __ LoadField(AccessBuilder::ForMap(), value);
+      Node* value_instance_type =
+          __ LoadField(AccessBuilder::ForMapInstanceType(), value_map);
+      Node* check = __ Uint32LessThan(
+          value_instance_type, __ Uint32Constant(FIRST_JS_RECEIVER_TYPE));
+      __ GotoIf(check, &convert_to_object);
+      __ Goto(&done_convert, value);
+
+      // Wrap the primitive {value} into a JSValue.
+      __ Bind(&convert_to_object);
+      __ GotoIf(__ WordEqual(value, __ UndefinedConstant()),
+                &convert_global_proxy);
+      __ GotoIf(__ WordEqual(value, __ NullConstant()), &convert_global_proxy);
+      Operator::Properties properties = Operator::kEliminatable;
+      Callable callable = Builtins::CallableFor(isolate(), Builtins::kToObject);
+      CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
+      auto call_descriptor = Linkage::GetStubCallDescriptor(
+          graph()->zone(), callable.descriptor(), 0, flags, properties);
+      Node* native_context = __ LoadField(
+          AccessBuilder::ForJSGlobalProxyNativeContext(), global_proxy);
+      Node* result = __ Call(call_descriptor, __ HeapConstant(callable.code()),
+                             value, native_context);
+      __ Goto(&done_convert, result);
+
+      // Replace the {value} with the {global_proxy}.
+      __ Bind(&convert_global_proxy);
+      __ Goto(&done_convert, global_proxy);
+
+      __ Bind(&done_convert);
+      return done_convert.PhiAt(0);
+    }
+  }
+
+  UNREACHABLE();
+  return nullptr;
+}
+
+Maybe<Node*> EffectControlLinearizer::LowerFloat64RoundUp(Node* node) {
+  // Nothing to be done if a fast hardware instruction is available.
+  if (machine()->Float64RoundUp().IsSupported()) {
+    return Nothing<Node*>();
+  }
+
   Node* const input = node->InputAt(0);
 
   // General case for ceil.
@@ -2923,111 +4451,70 @@ EffectControlLinearizer::LowerFloat64RoundUp(Node* node, Node* effect,
   //         let temp2 = (2^52 + temp1) - 2^52 in
   //         let temp3 = (if temp1 < temp2 then temp2 - 1 else temp2) in
   //         -0 - temp3
-  //
-  // Note: We do not use the Diamond helper class here, because it really hurts
-  // readability with nested diamonds.
 
-  Node* check0 = graph()->NewNode(machine()->Float64LessThan(), zero, input);
-  Node* branch0 =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check0, control);
+  auto if_not_positive = __ MakeDeferredLabel();
+  auto if_greater_than_two_52 = __ MakeDeferredLabel();
+  auto if_less_than_minus_two_52 = __ MakeDeferredLabel();
+  auto if_zero = __ MakeDeferredLabel();
+  auto done_temp3 = __ MakeLabel(MachineRepresentation::kFloat64);
+  auto done = __ MakeLabel(MachineRepresentation::kFloat64);
 
-  Node* if_true0 = graph()->NewNode(common()->IfTrue(), branch0);
-  Node* vtrue0;
+  Node* const zero = __ Float64Constant(0.0);
+  Node* const two_52 = __ Float64Constant(4503599627370496.0E0);
+  Node* const one = __ Float64Constant(1.0);
+
+  Node* check0 = __ Float64LessThan(zero, input);
+  __ GotoIfNot(check0, &if_not_positive);
   {
-    Node* check1 =
-        graph()->NewNode(machine()->Float64LessThanOrEqual(), two_52, input);
-    Node* branch1 = graph()->NewNode(common()->Branch(), check1, if_true0);
-
-    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-    Node* vtrue1 = input;
-
-    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-    Node* vfalse1;
+    Node* check1 = __ Float64LessThanOrEqual(two_52, input);
+    __ GotoIf(check1, &if_greater_than_two_52);
     {
-      Node* temp1 = graph()->NewNode(
-          machine()->Float64Sub(),
-          graph()->NewNode(machine()->Float64Add(), two_52, input), two_52);
-      vfalse1 = graph()->NewNode(
-          common()->Select(MachineRepresentation::kFloat64),
-          graph()->NewNode(machine()->Float64LessThan(), temp1, input),
-          graph()->NewNode(machine()->Float64Add(), temp1, one), temp1);
+      Node* temp1 = __ Float64Sub(__ Float64Add(two_52, input), two_52);
+      __ GotoIfNot(__ Float64LessThan(temp1, input), &done, temp1);
+      __ Goto(&done, __ Float64Add(temp1, one));
     }
 
-    if_true0 = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
-    vtrue0 = graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2),
-                              vtrue1, vfalse1, if_true0);
+    __ Bind(&if_greater_than_two_52);
+    __ Goto(&done, input);
   }
 
-  Node* if_false0 = graph()->NewNode(common()->IfFalse(), branch0);
-  Node* vfalse0;
+  __ Bind(&if_not_positive);
   {
-    Node* check1 = graph()->NewNode(machine()->Float64Equal(), input, zero);
-    Node* branch1 = graph()->NewNode(common()->Branch(BranchHint::kFalse),
-                                     check1, if_false0);
+    Node* check1 = __ Float64Equal(input, zero);
+    __ GotoIf(check1, &if_zero);
 
-    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-    Node* vtrue1 = input;
+    Node* const minus_two_52 = __ Float64Constant(-4503599627370496.0E0);
+    Node* check2 = __ Float64LessThanOrEqual(input, minus_two_52);
+    __ GotoIf(check2, &if_less_than_minus_two_52);
 
-    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-    Node* vfalse1;
     {
-      Node* check2 = graph()->NewNode(machine()->Float64LessThanOrEqual(),
-                                      input, minus_two_52);
-      Node* branch2 = graph()->NewNode(common()->Branch(BranchHint::kFalse),
-                                       check2, if_false1);
+      Node* const minus_zero = __ Float64Constant(-0.0);
+      Node* temp1 = __ Float64Sub(minus_zero, input);
+      Node* temp2 = __ Float64Sub(__ Float64Add(two_52, temp1), two_52);
+      Node* check3 = __ Float64LessThan(temp1, temp2);
+      __ GotoIfNot(check3, &done_temp3, temp2);
+      __ Goto(&done_temp3, __ Float64Sub(temp2, one));
 
-      Node* if_true2 = graph()->NewNode(common()->IfTrue(), branch2);
-      Node* vtrue2 = input;
-
-      Node* if_false2 = graph()->NewNode(common()->IfFalse(), branch2);
-      Node* vfalse2;
-      {
-        Node* temp1 =
-            graph()->NewNode(machine()->Float64Sub(), minus_zero, input);
-        Node* temp2 = graph()->NewNode(
-            machine()->Float64Sub(),
-            graph()->NewNode(machine()->Float64Add(), two_52, temp1), two_52);
-        Node* temp3 = graph()->NewNode(
-            common()->Select(MachineRepresentation::kFloat64),
-            graph()->NewNode(machine()->Float64LessThan(), temp1, temp2),
-            graph()->NewNode(machine()->Float64Sub(), temp2, one), temp2);
-        vfalse2 = graph()->NewNode(machine()->Float64Sub(), minus_zero, temp3);
-      }
-
-      if_false1 = graph()->NewNode(common()->Merge(2), if_true2, if_false2);
-      vfalse1 =
-          graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2),
-                           vtrue2, vfalse2, if_false1);
+      __ Bind(&done_temp3);
+      Node* temp3 = done_temp3.PhiAt(0);
+      __ Goto(&done, __ Float64Sub(minus_zero, temp3));
     }
+    __ Bind(&if_less_than_minus_two_52);
+    __ Goto(&done, input);
 
-    if_false0 = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
-    vfalse0 =
-        graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2),
-                         vtrue1, vfalse1, if_false0);
+    __ Bind(&if_zero);
+    __ Goto(&done, input);
   }
-
-  Node* merge0 = graph()->NewNode(common()->Merge(2), if_true0, if_false0);
-  Node* value =
-      graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2),
-                       vtrue0, vfalse0, merge0);
-  return ValueEffectControl(value, effect, merge0);
+  __ Bind(&done);
+  return Just(done.PhiAt(0));
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerFloat64RoundDown(Node* node, Node* effect,
-                                               Node* control) {
-  // Nothing to be done if a fast hardware instruction is available.
+Node* EffectControlLinearizer::BuildFloat64RoundDown(Node* value) {
   if (machine()->Float64RoundDown().IsSupported()) {
-    return ValueEffectControl(node, effect, control);
+    return __ Float64RoundDown(value);
   }
 
-  Node* const one = jsgraph()->Float64Constant(1.0);
-  Node* const zero = jsgraph()->Float64Constant(0.0);
-  Node* const minus_one = jsgraph()->Float64Constant(-1.0);
-  Node* const minus_zero = jsgraph()->Float64Constant(-0.0);
-  Node* const two_52 = jsgraph()->Float64Constant(4503599627370496.0E0);
-  Node* const minus_two_52 = jsgraph()->Float64Constant(-4503599627370496.0E0);
-  Node* const input = node->InputAt(0);
+  Node* const input = value;
 
   // General case for floor.
   //
@@ -3053,111 +4540,125 @@ EffectControlLinearizer::LowerFloat64RoundDown(Node* node, Node* effect,
   //           -1 - temp2
   //         else
   //           -0 - temp2
-  //
-  // Note: We do not use the Diamond helper class here, because it really hurts
-  // readability with nested diamonds.
 
-  Node* check0 = graph()->NewNode(machine()->Float64LessThan(), zero, input);
-  Node* branch0 =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check0, control);
+  auto if_not_positive = __ MakeDeferredLabel();
+  auto if_greater_than_two_52 = __ MakeDeferredLabel();
+  auto if_less_than_minus_two_52 = __ MakeDeferredLabel();
+  auto if_temp2_lt_temp1 = __ MakeLabel();
+  auto if_zero = __ MakeDeferredLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kFloat64);
 
-  Node* if_true0 = graph()->NewNode(common()->IfTrue(), branch0);
-  Node* vtrue0;
+  Node* const zero = __ Float64Constant(0.0);
+  Node* const two_52 = __ Float64Constant(4503599627370496.0E0);
+
+  Node* check0 = __ Float64LessThan(zero, input);
+  __ GotoIfNot(check0, &if_not_positive);
   {
-    Node* check1 =
-        graph()->NewNode(machine()->Float64LessThanOrEqual(), two_52, input);
-    Node* branch1 = graph()->NewNode(common()->Branch(), check1, if_true0);
-
-    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-    Node* vtrue1 = input;
-
-    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-    Node* vfalse1;
+    Node* check1 = __ Float64LessThanOrEqual(two_52, input);
+    __ GotoIf(check1, &if_greater_than_two_52);
     {
-      Node* temp1 = graph()->NewNode(
-          machine()->Float64Sub(),
-          graph()->NewNode(machine()->Float64Add(), two_52, input), two_52);
-      vfalse1 = graph()->NewNode(
-          common()->Select(MachineRepresentation::kFloat64),
-          graph()->NewNode(machine()->Float64LessThan(), input, temp1),
-          graph()->NewNode(machine()->Float64Sub(), temp1, one), temp1);
+      Node* const one = __ Float64Constant(1.0);
+      Node* temp1 = __ Float64Sub(__ Float64Add(two_52, input), two_52);
+      __ GotoIfNot(__ Float64LessThan(input, temp1), &done, temp1);
+      __ Goto(&done, __ Float64Sub(temp1, one));
     }
 
-    if_true0 = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
-    vtrue0 = graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2),
-                              vtrue1, vfalse1, if_true0);
+    __ Bind(&if_greater_than_two_52);
+    __ Goto(&done, input);
   }
 
-  Node* if_false0 = graph()->NewNode(common()->IfFalse(), branch0);
-  Node* vfalse0;
+  __ Bind(&if_not_positive);
   {
-    Node* check1 = graph()->NewNode(machine()->Float64Equal(), input, zero);
-    Node* branch1 = graph()->NewNode(common()->Branch(BranchHint::kFalse),
-                                     check1, if_false0);
+    Node* check1 = __ Float64Equal(input, zero);
+    __ GotoIf(check1, &if_zero);
 
-    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-    Node* vtrue1 = input;
+    Node* const minus_two_52 = __ Float64Constant(-4503599627370496.0E0);
+    Node* check2 = __ Float64LessThanOrEqual(input, minus_two_52);
+    __ GotoIf(check2, &if_less_than_minus_two_52);
 
-    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-    Node* vfalse1;
     {
-      Node* check2 = graph()->NewNode(machine()->Float64LessThanOrEqual(),
-                                      input, minus_two_52);
-      Node* branch2 = graph()->NewNode(common()->Branch(BranchHint::kFalse),
-                                       check2, if_false1);
+      Node* const minus_zero = __ Float64Constant(-0.0);
+      Node* temp1 = __ Float64Sub(minus_zero, input);
+      Node* temp2 = __ Float64Sub(__ Float64Add(two_52, temp1), two_52);
+      Node* check3 = __ Float64LessThan(temp2, temp1);
+      __ GotoIf(check3, &if_temp2_lt_temp1);
+      __ Goto(&done, __ Float64Sub(minus_zero, temp2));
 
-      Node* if_true2 = graph()->NewNode(common()->IfTrue(), branch2);
-      Node* vtrue2 = input;
-
-      Node* if_false2 = graph()->NewNode(common()->IfFalse(), branch2);
-      Node* vfalse2;
-      {
-        Node* temp1 =
-            graph()->NewNode(machine()->Float64Sub(), minus_zero, input);
-        Node* temp2 = graph()->NewNode(
-            machine()->Float64Sub(),
-            graph()->NewNode(machine()->Float64Add(), two_52, temp1), two_52);
-        vfalse2 = graph()->NewNode(
-            common()->Select(MachineRepresentation::kFloat64),
-            graph()->NewNode(machine()->Float64LessThan(), temp2, temp1),
-            graph()->NewNode(machine()->Float64Sub(), minus_one, temp2),
-            graph()->NewNode(machine()->Float64Sub(), minus_zero, temp2));
-      }
-
-      if_false1 = graph()->NewNode(common()->Merge(2), if_true2, if_false2);
-      vfalse1 =
-          graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2),
-                           vtrue2, vfalse2, if_false1);
+      __ Bind(&if_temp2_lt_temp1);
+      __ Goto(&done, __ Float64Sub(__ Float64Constant(-1.0), temp2));
     }
+    __ Bind(&if_less_than_minus_two_52);
+    __ Goto(&done, input);
 
-    if_false0 = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
-    vfalse0 =
-        graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2),
-                         vtrue1, vfalse1, if_false0);
+    __ Bind(&if_zero);
+    __ Goto(&done, input);
   }
-
-  Node* merge0 = graph()->NewNode(common()->Merge(2), if_true0, if_false0);
-  Node* value =
-      graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2),
-                       vtrue0, vfalse0, merge0);
-  return ValueEffectControl(value, effect, merge0);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
 
-EffectControlLinearizer::ValueEffectControl
-EffectControlLinearizer::LowerFloat64RoundTruncate(Node* node, Node* effect,
-                                                   Node* control) {
+Maybe<Node*> EffectControlLinearizer::LowerFloat64RoundDown(Node* node) {
   // Nothing to be done if a fast hardware instruction is available.
-  if (machine()->Float64RoundTruncate().IsSupported()) {
-    return ValueEffectControl(node, effect, control);
+  if (machine()->Float64RoundDown().IsSupported()) {
+    return Nothing<Node*>();
   }
 
-  Node* const one = jsgraph()->Float64Constant(1.0);
-  Node* const zero = jsgraph()->Float64Constant(0.0);
-  Node* const minus_zero = jsgraph()->Float64Constant(-0.0);
-  Node* const two_52 = jsgraph()->Float64Constant(4503599627370496.0E0);
-  Node* const minus_two_52 = jsgraph()->Float64Constant(-4503599627370496.0E0);
+  Node* const input = node->InputAt(0);
+  return Just(BuildFloat64RoundDown(input));
+}
+
+Maybe<Node*> EffectControlLinearizer::LowerFloat64RoundTiesEven(Node* node) {
+  // Nothing to be done if a fast hardware instruction is available.
+  if (machine()->Float64RoundTiesEven().IsSupported()) {
+    return Nothing<Node*>();
+  }
+
   Node* const input = node->InputAt(0);
 
+  // Generate case for round ties to even:
+  //
+  //   let value = floor(input) in
+  //   let temp1 = input - value in
+  //   if temp1 < 0.5 then
+  //     value
+  //   else if 0.5 < temp1 then
+  //     value + 1.0
+  //   else
+  //     let temp2 = value % 2.0 in
+  //     if temp2 == 0.0 then
+  //       value
+  //     else
+  //       value + 1.0
+
+  auto if_is_half = __ MakeLabel();
+  auto done = __ MakeLabel(MachineRepresentation::kFloat64);
+
+  Node* value = BuildFloat64RoundDown(input);
+  Node* temp1 = __ Float64Sub(input, value);
+
+  Node* const half = __ Float64Constant(0.5);
+  Node* check0 = __ Float64LessThan(temp1, half);
+  __ GotoIf(check0, &done, value);
+
+  Node* const one = __ Float64Constant(1.0);
+  Node* check1 = __ Float64LessThan(half, temp1);
+  __ GotoIfNot(check1, &if_is_half);
+  __ Goto(&done, __ Float64Add(value, one));
+
+  __ Bind(&if_is_half);
+  Node* temp2 = __ Float64Mod(value, __ Float64Constant(2.0));
+  Node* check2 = __ Float64Equal(temp2, __ Float64Constant(0.0));
+  __ GotoIf(check2, &done, value);
+  __ Goto(&done, __ Float64Add(value, one));
+
+  __ Bind(&done);
+  return Just(done.PhiAt(0));
+}
+
+Node* EffectControlLinearizer::BuildFloat64RoundTruncate(Node* input) {
+  if (machine()->Float64RoundTruncate().IsSupported()) {
+    return __ Float64RoundTruncate(input);
+  }
   // General case for trunc.
   //
   //   if 0.0 < input then
@@ -3184,91 +4685,189 @@ EffectControlLinearizer::LowerFloat64RoundTruncate(Node* node, Node* effect,
   // Note: We do not use the Diamond helper class here, because it really hurts
   // readability with nested diamonds.
 
-  Node* check0 = graph()->NewNode(machine()->Float64LessThan(), zero, input);
-  Node* branch0 =
-      graph()->NewNode(common()->Branch(BranchHint::kTrue), check0, control);
+  auto if_not_positive = __ MakeDeferredLabel();
+  auto if_greater_than_two_52 = __ MakeDeferredLabel();
+  auto if_less_than_minus_two_52 = __ MakeDeferredLabel();
+  auto if_zero = __ MakeDeferredLabel();
+  auto done_temp3 = __ MakeLabel(MachineRepresentation::kFloat64);
+  auto done = __ MakeLabel(MachineRepresentation::kFloat64);
 
-  Node* if_true0 = graph()->NewNode(common()->IfTrue(), branch0);
-  Node* vtrue0;
+  Node* const zero = __ Float64Constant(0.0);
+  Node* const two_52 = __ Float64Constant(4503599627370496.0E0);
+  Node* const one = __ Float64Constant(1.0);
+
+  Node* check0 = __ Float64LessThan(zero, input);
+  __ GotoIfNot(check0, &if_not_positive);
   {
-    Node* check1 =
-        graph()->NewNode(machine()->Float64LessThanOrEqual(), two_52, input);
-    Node* branch1 = graph()->NewNode(common()->Branch(), check1, if_true0);
-
-    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-    Node* vtrue1 = input;
-
-    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-    Node* vfalse1;
+    Node* check1 = __ Float64LessThanOrEqual(two_52, input);
+    __ GotoIf(check1, &if_greater_than_two_52);
     {
-      Node* temp1 = graph()->NewNode(
-          machine()->Float64Sub(),
-          graph()->NewNode(machine()->Float64Add(), two_52, input), two_52);
-      vfalse1 = graph()->NewNode(
-          common()->Select(MachineRepresentation::kFloat64),
-          graph()->NewNode(machine()->Float64LessThan(), input, temp1),
-          graph()->NewNode(machine()->Float64Sub(), temp1, one), temp1);
+      Node* temp1 = __ Float64Sub(__ Float64Add(two_52, input), two_52);
+      __ GotoIfNot(__ Float64LessThan(input, temp1), &done, temp1);
+      __ Goto(&done, __ Float64Sub(temp1, one));
     }
 
-    if_true0 = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
-    vtrue0 = graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2),
-                              vtrue1, vfalse1, if_true0);
+    __ Bind(&if_greater_than_two_52);
+    __ Goto(&done, input);
   }
 
-  Node* if_false0 = graph()->NewNode(common()->IfFalse(), branch0);
-  Node* vfalse0;
+  __ Bind(&if_not_positive);
   {
-    Node* check1 = graph()->NewNode(machine()->Float64Equal(), input, zero);
-    Node* branch1 = graph()->NewNode(common()->Branch(BranchHint::kFalse),
-                                     check1, if_false0);
+    Node* check1 = __ Float64Equal(input, zero);
+    __ GotoIf(check1, &if_zero);
 
-    Node* if_true1 = graph()->NewNode(common()->IfTrue(), branch1);
-    Node* vtrue1 = input;
+    Node* const minus_two_52 = __ Float64Constant(-4503599627370496.0E0);
+    Node* check2 = __ Float64LessThanOrEqual(input, minus_two_52);
+    __ GotoIf(check2, &if_less_than_minus_two_52);
 
-    Node* if_false1 = graph()->NewNode(common()->IfFalse(), branch1);
-    Node* vfalse1;
     {
-      Node* check2 = graph()->NewNode(machine()->Float64LessThanOrEqual(),
-                                      input, minus_two_52);
-      Node* branch2 = graph()->NewNode(common()->Branch(BranchHint::kFalse),
-                                       check2, if_false1);
+      Node* const minus_zero = __ Float64Constant(-0.0);
+      Node* temp1 = __ Float64Sub(minus_zero, input);
+      Node* temp2 = __ Float64Sub(__ Float64Add(two_52, temp1), two_52);
+      Node* check3 = __ Float64LessThan(temp1, temp2);
+      __ GotoIfNot(check3, &done_temp3, temp2);
+      __ Goto(&done_temp3, __ Float64Sub(temp2, one));
 
-      Node* if_true2 = graph()->NewNode(common()->IfTrue(), branch2);
-      Node* vtrue2 = input;
-
-      Node* if_false2 = graph()->NewNode(common()->IfFalse(), branch2);
-      Node* vfalse2;
-      {
-        Node* temp1 =
-            graph()->NewNode(machine()->Float64Sub(), minus_zero, input);
-        Node* temp2 = graph()->NewNode(
-            machine()->Float64Sub(),
-            graph()->NewNode(machine()->Float64Add(), two_52, temp1), two_52);
-        Node* temp3 = graph()->NewNode(
-            common()->Select(MachineRepresentation::kFloat64),
-            graph()->NewNode(machine()->Float64LessThan(), temp1, temp2),
-            graph()->NewNode(machine()->Float64Sub(), temp2, one), temp2);
-        vfalse2 = graph()->NewNode(machine()->Float64Sub(), minus_zero, temp3);
-      }
-
-      if_false1 = graph()->NewNode(common()->Merge(2), if_true2, if_false2);
-      vfalse1 =
-          graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2),
-                           vtrue2, vfalse2, if_false1);
+      __ Bind(&done_temp3);
+      Node* temp3 = done_temp3.PhiAt(0);
+      __ Goto(&done, __ Float64Sub(minus_zero, temp3));
     }
+    __ Bind(&if_less_than_minus_two_52);
+    __ Goto(&done, input);
 
-    if_false0 = graph()->NewNode(common()->Merge(2), if_true1, if_false1);
-    vfalse0 =
-        graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2),
-                         vtrue1, vfalse1, if_false0);
+    __ Bind(&if_zero);
+    __ Goto(&done, input);
   }
-
-  Node* merge0 = graph()->NewNode(common()->Merge(2), if_true0, if_false0);
-  Node* value =
-      graph()->NewNode(common()->Phi(MachineRepresentation::kFloat64, 2),
-                       vtrue0, vfalse0, merge0);
-  return ValueEffectControl(value, effect, merge0);
+  __ Bind(&done);
+  return done.PhiAt(0);
 }
+
+Maybe<Node*> EffectControlLinearizer::LowerFloat64RoundTruncate(Node* node) {
+  // Nothing to be done if a fast hardware instruction is available.
+  if (machine()->Float64RoundTruncate().IsSupported()) {
+    return Nothing<Node*>();
+  }
+
+  Node* const input = node->InputAt(0);
+  return Just(BuildFloat64RoundTruncate(input));
+}
+
+Node* EffectControlLinearizer::LowerFindOrderedHashMapEntry(Node* node) {
+  Node* table = NodeProperties::GetValueInput(node, 0);
+  Node* key = NodeProperties::GetValueInput(node, 1);
+
+  {
+    Callable const callable =
+        Builtins::CallableFor(isolate(), Builtins::kFindOrderedHashMapEntry);
+    Operator::Properties const properties = node->op()->properties();
+    CallDescriptor::Flags const flags = CallDescriptor::kNoFlags;
+    auto call_descriptor = Linkage::GetStubCallDescriptor(
+        graph()->zone(), callable.descriptor(), 0, flags, properties);
+    return __ Call(call_descriptor, __ HeapConstant(callable.code()), table,
+                   key, __ NoContextConstant());
+  }
+}
+
+Node* EffectControlLinearizer::ComputeUnseededHash(Node* value) {
+  // See v8::internal::ComputeUnseededHash()
+  value = __ Int32Add(__ Word32Xor(value, __ Int32Constant(0xFFFFFFFF)),
+                      __ Word32Shl(value, __ Int32Constant(15)));
+  value = __ Word32Xor(value, __ Word32Shr(value, __ Int32Constant(12)));
+  value = __ Int32Add(value, __ Word32Shl(value, __ Int32Constant(2)));
+  value = __ Word32Xor(value, __ Word32Shr(value, __ Int32Constant(4)));
+  value = __ Int32Mul(value, __ Int32Constant(2057));
+  value = __ Word32Xor(value, __ Word32Shr(value, __ Int32Constant(16)));
+  value = __ Word32And(value, __ Int32Constant(0x3FFFFFFF));
+  return value;
+}
+
+Node* EffectControlLinearizer::LowerFindOrderedHashMapEntryForInt32Key(
+    Node* node) {
+  Node* table = NodeProperties::GetValueInput(node, 0);
+  Node* key = NodeProperties::GetValueInput(node, 1);
+
+  // Compute the integer hash code.
+  Node* hash = ChangeUint32ToUintPtr(ComputeUnseededHash(key));
+
+  Node* number_of_buckets = ChangeSmiToIntPtr(__ LoadField(
+      AccessBuilder::ForOrderedHashTableBaseNumberOfBuckets(), table));
+  hash = __ WordAnd(hash, __ IntSub(number_of_buckets, __ IntPtrConstant(1)));
+  Node* first_entry = ChangeSmiToIntPtr(__ Load(
+      MachineType::TaggedSigned(), table,
+      __ IntAdd(__ WordShl(hash, __ IntPtrConstant(kPointerSizeLog2)),
+                __ IntPtrConstant(OrderedHashMap::kHashTableStartOffset -
+                                  kHeapObjectTag))));
+
+  auto loop = __ MakeLoopLabel(MachineType::PointerRepresentation());
+  auto done = __ MakeLabel(MachineRepresentation::kWord32);
+  __ Goto(&loop, first_entry);
+  __ Bind(&loop);
+  {
+    Node* entry = loop.PhiAt(0);
+    Node* check =
+        __ WordEqual(entry, __ IntPtrConstant(OrderedHashMap::kNotFound));
+    __ GotoIf(check, &done, __ Int32Constant(-1));
+    entry = __ IntAdd(
+        __ IntMul(entry, __ IntPtrConstant(OrderedHashMap::kEntrySize)),
+        number_of_buckets);
+
+    Node* candidate_key = __ Load(
+        MachineType::AnyTagged(), table,
+        __ IntAdd(__ WordShl(entry, __ IntPtrConstant(kPointerSizeLog2)),
+                  __ IntPtrConstant(OrderedHashMap::kHashTableStartOffset -
+                                    kHeapObjectTag)));
+
+    auto if_match = __ MakeLabel();
+    auto if_notmatch = __ MakeLabel();
+    auto if_notsmi = __ MakeDeferredLabel();
+    __ GotoIfNot(ObjectIsSmi(candidate_key), &if_notsmi);
+    __ Branch(__ Word32Equal(ChangeSmiToInt32(candidate_key), key), &if_match,
+              &if_notmatch);
+
+    __ Bind(&if_notsmi);
+    __ GotoIfNot(
+        __ WordEqual(__ LoadField(AccessBuilder::ForMap(), candidate_key),
+                     __ HeapNumberMapConstant()),
+        &if_notmatch);
+    __ Branch(__ Float64Equal(__ LoadField(AccessBuilder::ForHeapNumberValue(),
+                                           candidate_key),
+                              __ ChangeInt32ToFloat64(key)),
+              &if_match, &if_notmatch);
+
+    __ Bind(&if_match);
+    {
+      Node* index = ChangeIntPtrToInt32(entry);
+      __ Goto(&done, index);
+    }
+
+    __ Bind(&if_notmatch);
+    {
+      Node* next_entry = ChangeSmiToIntPtr(__ Load(
+          MachineType::TaggedSigned(), table,
+          __ IntAdd(
+              __ WordShl(entry, __ IntPtrConstant(kPointerSizeLog2)),
+              __ IntPtrConstant(OrderedHashMap::kHashTableStartOffset +
+                                OrderedHashMap::kChainOffset * kPointerSize -
+                                kHeapObjectTag))));
+      __ Goto(&loop, next_entry);
+    }
+  }
+
+  __ Bind(&done);
+  return done.PhiAt(0);
+}
+
+Node* EffectControlLinearizer::LowerDateNow(Node* node) {
+  Operator::Properties properties = Operator::kNoDeopt | Operator::kNoThrow;
+  Runtime::FunctionId id = Runtime::kDateCurrentTime;
+  auto call_descriptor = Linkage::GetRuntimeCallDescriptor(
+      graph()->zone(), id, 0, properties, CallDescriptor::kNoFlags);
+  return __ Call(call_descriptor, __ CEntryStubConstant(1),
+                 __ ExternalConstant(ExternalReference::Create(id)),
+                 __ Int32Constant(0), __ NoContextConstant());
+}
+
+#undef __
 
 Factory* EffectControlLinearizer::factory() const {
   return isolate()->factory();
@@ -3276,18 +4875,6 @@ Factory* EffectControlLinearizer::factory() const {
 
 Isolate* EffectControlLinearizer::isolate() const {
   return jsgraph()->isolate();
-}
-
-Operator const* EffectControlLinearizer::ToNumberOperator() {
-  if (!to_number_operator_.is_set()) {
-    Callable callable = CodeFactory::ToNumber(isolate());
-    CallDescriptor::Flags flags = CallDescriptor::kNoFlags;
-    CallDescriptor* desc = Linkage::GetStubCallDescriptor(
-        isolate(), graph()->zone(), callable.descriptor(), 0, flags,
-        Operator::kEliminatable);
-    to_number_operator_.set(common()->Call(desc));
-  }
-  return to_number_operator_.get();
 }
 
 }  // namespace compiler
