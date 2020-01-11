@@ -10,7 +10,7 @@
 Delivers a JSON-formatted diagnostic summary, written to a file.
 
 The report is intended for development, test and production use, to capture
-and preserve information for problem determination. It includes JavaScript
+and preserve information for problem determination. Note that it includes JavaScript
 and native stack traces, heap statistics, platform information, resource
 usage etc. With the report option enabled, diagnostic reports can be triggered
 on unhandled exceptions, fatal errors and user signals, in addition to
@@ -22,7 +22,7 @@ is provided below for reference.
 ```json
 {
   "header": {
-    "reportVersion": 1,
+      "reportVersion": 1,
     "event": "exception",
     "trigger": "Exception",
     "filename": "report.20181221.005011.8974.0.001.json",
@@ -435,7 +435,7 @@ written.
 A report can also be triggered via an API call from a JavaScript application:
 
 ```js
-process.report.writeReport();
+process.report.writeReport(  );
 ```
 
 This function takes an optional additional argument `filename`, which is
@@ -446,7 +446,7 @@ process.report.writeReport('./foo.json');
 ```
 
 This function takes an optional additional argument `err` which is an `Error`
-object that will be used as the context for the JavaScript stack printed in the
+object that will be used as the context for the Javascript stack printed in the
 report. When using report to handle errors in a callback or an exception
 handler, this allows the report to include the location of the original error as
 well as where it was handled.
