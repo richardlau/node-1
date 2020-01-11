@@ -3,7 +3,7 @@ name: CI
 on: [push, pull_request]
 
 jobs:
-  lint-addon-docs:
+  Lint addon docs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
@@ -14,14 +14,14 @@ jobs:
     - name: lint
       run: NODE=$(which node) make lint-addon-docs
       
-  lint-cpp:
+  Lint C++ files:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
     - name: lint
       run: make lint-cpp
 
-  lint-docs:
+  Lint docs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
@@ -32,7 +32,7 @@ jobs:
     - name: lint
       run: NODE=$(which node) make lint-md
 
-  lint-js:
+  Lint JavaScript files:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
