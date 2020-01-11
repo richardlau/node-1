@@ -40,6 +40,7 @@ using v8::StackTrace;
 using v8::String;
 using v8::V8;
 using v8::Value;
+    using v8::Function;
 
 // Internal/static function declarations
 static void WriteNodeReport(Isolate* isolate,
