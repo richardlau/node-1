@@ -14,7 +14,7 @@ jobs:
       - name: Environment Information
         run: npx envinfo
       - name: Build
-        run: ./configure && make -j2
+        run: ./configure --verbose && make -j
   build-windows:
     runs-on: windows-latest
     steps:
@@ -40,7 +40,7 @@ jobs:
       - name: Environment Information
         run: npx envinfo
       - name: Build
-        run: ./configure && make -j8
+        run: ./configure --verbose && make -j
   lint-addon-docs:
     runs-on: ubuntu-latest
     steps:
