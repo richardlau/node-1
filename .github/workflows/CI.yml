@@ -13,8 +13,10 @@ jobs:
           node-version: 13.x
       - name: Environment Information
         run: npx envinfo
+      - name: Configure
+        run: ./configure --verbose
       - name: Build
-        run: ./configure --verbose && make -j
+        run: make -j4
   build-windows:
     runs-on: windows-latest
     steps:
@@ -39,8 +41,10 @@ jobs:
           node-version: 13.x
       - name: Environment Information
         run: npx envinfo
+      - name: Configure
+        run: ./configure --verbose
       - name: Build
-        run: ./configure --verbose && make -j
+        run: make -j8
   lint-addon-docs:
     runs-on: ubuntu-latest
     steps:
