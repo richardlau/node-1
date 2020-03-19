@@ -5,7 +5,7 @@
       "pattern": [
         {
           // Filename may be decorated by ANSI escape sequences
-          "regexp": "^(?:\\x1b\\[\\d+m)*(.*?)(?:\\x1b\\[\\d+m)*$",
+          "regexp": "^(?:\\x1b\\[\\d+m)*(.+?)(?:\\x1b\\[\\d+m)*$",
           "file": 1
         },
         {
