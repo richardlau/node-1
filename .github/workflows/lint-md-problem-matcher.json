@@ -4,7 +4,7 @@
             "owner": "lint-md",
             "pattern": [
                 {
-                    "regexp": "^(.*)$",
+                    "regexp": "^(?:\\x1b\\[(?:\\d+)m)*(.*)(?:\\x1b\\[(?:\\d+)m)*$",
                     "file": 1
                 },
                 {
