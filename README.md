@@ -8,8 +8,8 @@
   </a>
 </p>
 
-Nodejs is an open-source, cross-platform, JavaScript runtime environment. It
-executes javascript code outside of a browser. For more information on using
+Node.js is an open-source, cross-platform, JavaScript runtime environment. It
+executes JavaScript code outside of a browser. For more information on using
 Node.js, see the [Node.js Website][].
 
 The Node.js project uses an [open governance model](./GOVERNANCE.md). The [OpenJS Foundation][] provides support for the project.
@@ -21,10 +21,10 @@ The Node.js project uses an [open governance model](./GOVERNANCE.md). The [OpenJ
 * [Support](#support)
 * [Release Types](#release-types)
   * [Download](#download)
-    - [Current and LTS Releases](#current-and-lts-releases)
-    - [Nightly Releases](#nightly-releases)
-    - [API Documentation](#api-documentation)
-  * [Verifying Binaries](#verifying-binaries)
+    * [Current and LTS Releases](#current-and-lts-releases)
+    * [Nightly Releases](#nightly-releases)
+    * [API Documentation](#api-documentation)
+  - [Verifying Binaries](#verifying-binaries)
 * [Building Node.js](#building-nodejs)
 * [Security](#security)
 * [Contributing to Node.js](#contributing-to-nodejs)
