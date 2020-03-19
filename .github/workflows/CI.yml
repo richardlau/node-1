@@ -47,7 +47,7 @@ jobs:
     - name: Lint docs
       run: |
         echo "::add-matcher::.github/workflows/lint-md-problem-matcher.json"
-        NODE=$(which node) make lint-md
+        FORCE_COLOR=0 NODE=$(which node) make lint-md
   lint-js:
     runs-on: ubuntu-latest
     steps:
