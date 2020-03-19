@@ -8,12 +8,11 @@
   </a>
 </p>
 
-Node.js is an open-source, cross-platform, JavaScript runtime environment. It
-executes JavaScript code outside of a browser. For more information on using
+Nodejs is an open-source, cross-platform, JavaScript runtime environment. It
+executes javascript code outside of a browser. For more information on using
 Node.js, see the [Node.js Website][].
 
-The Node.js project uses an [open governance model](./GOVERNANCE.md). The
-[OpenJS Foundation][] provides support for the project.
+The Node.js project uses an [open governance model](./GOVERNANCE.md). The [OpenJS Foundation][] provides support for the project.
 
 **This project is bound by a [Code of Conduct][].**
 
@@ -22,9 +21,9 @@ The Node.js project uses an [open governance model](./GOVERNANCE.md). The
 * [Support](#support)
 * [Release Types](#release-types)
   * [Download](#download)
-    * [Current and LTS Releases](#current-and-lts-releases)
-    * [Nightly Releases](#nightly-releases)
-    * [API Documentation](#api-documentation)
+    - [Current and LTS Releases](#current-and-lts-releases)
+    - [Nightly Releases](#nightly-releases)
+    - [API Documentation](#api-documentation)
   * [Verifying Binaries](#verifying-binaries)
 * [Building Node.js](#building-nodejs)
 * [Security](#security)
@@ -54,8 +53,7 @@ Looking for help? Check out the
   of _Maintenance_. LTS release lines have alphabetically-ordered codenames,
   beginning with v4 Argon. There are no breaking changes or feature additions,
   except in some special circumstances.
-* **Nightly**: Code from the Current branch built every 24-hours when there are
-  changes. Use with caution.
+* **Nightly**: Code from the Current branch built every 24-hours when there are  changes. Use with caution.
 
 Current and LTS releases follow [Semantic Versioning](https://semver.org). A
 member of the Release Team [signs](#release-keys) each Current and LTS release.
@@ -74,7 +72,7 @@ The [latest](https://nodejs.org/download/release/latest/) directory is an
 alias for the latest Current release. The latest-_codename_ directory is an
 alias for the latest release from an LTS line. For example, the
 [latest-carbon](https://nodejs.org/download/release/latest-carbon/) directory
-contains the latest Carbon (Node.js 8) release.
+contains the latest Carbon (Node.js v8) release.
 
 #### Nightly Releases
 <https://nodejs.org/download/nightly/>
@@ -597,4 +595,4 @@ Other keys used to sign some previous releases:
 [Node.js Website]: https://nodejs.org/
 [OpenJS Foundation]: http://openjs.foundation/
 [Working Groups]: https://github.com/nodejs/TSC/blob/master/WORKING_GROUPS.md
-[Strategic Initiatives]: https://github.com/nodejs/TSC/blob/master/Strategic-Initiatives.md
+
