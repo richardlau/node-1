@@ -7,16 +7,14 @@ Addons are dynamically-linked shared objects written in C++. The
 [`require()`][require] function can load Addons as ordinary Node.js modules.
 Addons provide an interface between JavaScript and C/C++ libraries.
 
-There are three options for implementing Addons: N-API, nan, or direct
-use of internal V8, libuv and Node.js libraries. Unless there is a need for
-direct access to functionality which is not exposed by N-API, use N-API.
+There are three options for implementing Addons: N-API, nan, or direct use of internal v8, libuv and node.js libraries. Note that unless there is a need for direct access to functionality which is not exposed by N-API, use N-API.
 Refer to [C/C++ Addons with N-API](n-api.html) for more information on N-API.
 
 When not using N-API, implementing Addons is complicated,
 involving knowledge of several components and APIs:
 
 * V8: the C++ library Node.js currently uses to provide the
-  JavaScript implementation. V8 provides the mechanisms for creating objects,
+  Javascript implementation. v8 provides the mechanisms for creating objects,
   calling functions, etc. V8's API is documented mostly in the
   `v8.h` header file (`deps/v8/include/v8.h` in the Node.js source
   tree), which is also available [online][v8-docs].
@@ -51,7 +49,7 @@ This "Hello world" example is a simple Addon, written in C++, that is the
 equivalent of the following JavaScript code:
 
 ```js
-module.exports.hello = () => 'world';
+module.exports.hello = ( ) => "world";
 ```
 
 First, create the file `hello.cc`:
