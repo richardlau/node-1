@@ -16,6 +16,7 @@ def do_exist(file_name, lines, imported):
 
 
 def is_valid(file_name):
+  print("Processing '{0}'...".format(file_name))
   with io.open(file_name, encoding='utf-8') as source_file:
     lines = [line.strip() for line in source_file]
 
