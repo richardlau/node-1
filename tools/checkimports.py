@@ -46,7 +46,7 @@ if __name__ == '__main__':
     files = []
     for pattern in sys.argv[1:]:
       files = itertools.chain(files, glob.iglob(pattern))
-    print(files)
+    print(sys.argv[1:])
   else:
     files = glob.iglob('src/*.cc')
-  sys.exit(0 if all(map(is_valid, files)) else 1)
+  sys.exit(0 if all(list(map(is_valid, files))) else 1)
