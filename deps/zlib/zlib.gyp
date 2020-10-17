@@ -181,17 +181,6 @@
               'defines': [ 'CPU_NO_SIMD' ],
               'sources': [ '<(ZLIB_ROOT)/inflate.c', ],
             }],
-            ['target_arch in "ia32 x64 x32" and OS!="ios"', {
-              'dependencies': [
-                'zlib_crc32_simd',
-                'zlib_x86_simd',
-              ],
-              'sources': [
-                '<(ZLIB_ROOT)/x86.c',
-              ],
-            },{
-              'sources': [ '<(ZLIB_ROOT)/simd_stub.c' ],
-            }],
             ['arm_fpu=="neon"', {
               'dependencies': [ 'zlib_arm_crc32' ],
               'sources': [
