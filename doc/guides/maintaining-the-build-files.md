@@ -8,12 +8,12 @@ On how to build the Node.js core, see [Building Node.js](../../BUILDING.md).
 
 There are three main build files that may be directly run when building Node.js:
 
-* `configure`: A Python 2 script that detects system capabilities and runs
-  [GYP][]. It generates `config.gypi` which includes parameters used by GYP to
-  create platform-dependent build files. Its output is usually in one of these
-  formats: Makefile, MSbuild, ninja, or XCode project files (the main
-  Makefile mentioned below is maintained separately by humans). For a detailed
-  guide on this script, see [configure](#configure).
+* `configure`: A Python script that detects system capabilities and runs [GYP][].
+  It generates `config.gypi` which includes parameters used by GYP to create
+  platform-dependent build files. Its output is usually in one of these formats:
+  Makefile, MSbuild, ninja, or XCode project files (the main Makefile mentioned
+  below is maintained separately by humans). For a detailed guide on this script,
+  see [configure](#configure).
 * `vcbuild.bat`: A Windows Batch Script that locates build tools, provides a
   subset of the targets available in the [Makefile](#makefile), and a few
   targets of its own. For a detailed guide on this script, see
