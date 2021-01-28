@@ -227,8 +227,7 @@ Consult previous versions of this document for older versions of Node.js:
 
 ### Note about Python
 
-The Node.js project supports Python 3.6, 3.7, 3.8, and 3.9 for building and
-testing.
+The Node.js project supports Python >= 3 for building and testing.
 ### Unix and macOS
 
 #### Unix prerequisites
@@ -251,15 +250,8 @@ Python 3 users may also need to install `python3-distutils`.
 
 #### macOS prerequisites
 
-<<<<<<< HEAD
-* Xcode Command Line Tools >= 11 for macOS
-* Python (see note above)
-  * Python 2.7
-  * Python 3.5, 3.6, 3.7, and 3.8
-=======
 * Xcode Command Line Tools >= 10 for macOS
 * Python 3.6, 3.7, 3.8, and 3.9 (see note above)
->>>>>>> f8775b51b5 (Remove support for Python 2)
 
 macOS users can install the `Xcode Command Line Tools` by running
 `xcode-select --install`. Alternatively, if you already have the full Xcode
