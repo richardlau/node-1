@@ -110,7 +110,6 @@ if (process.argv.length === 2 &&
 }
 
 const isWindows = process.platform === 'win32';
-const isAIX = process.platform === 'aix';
 const isSunOS = process.platform === 'sunos';
 const isFreeBSD = process.platform === 'freebsd';
 const isOpenBSD = process.platform === 'openbsd';
@@ -239,7 +238,7 @@ function platformTimeout(ms) {
   if (process.features.debug)
     ms = multipliers.two * ms;
 
-  if (isAIX)
+  if (exports.isAIX)
     return multipliers.two * ms; // Default localhost speed is slower on AIX
 
   if (process.arch !== 'arm')
@@ -735,7 +734,6 @@ const common = {
   hasQuic,
   hasMultiLocalhost,
   invalidArgTypeHelper,
-  isAIX,
   isAlive,
   isDumbTerminal,
   isFreeBSD,
@@ -800,6 +798,10 @@ const common = {
 
   // On IBMi, process.platform and os.platform() both return 'aix',
   // It is not enough to differentiate between IBMi and real AIX system.
+  get isAIX() {
+    return (process.platform === 'aix') && (require('os').type() !== 'OS400');
+  },
+
   get isIBMi() {
     return require('os').type() === 'OS400';
   },
