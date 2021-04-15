@@ -15,12 +15,16 @@ exec python "$0" "$@"
 ]
 del _
 
+import os
 import sys
 from distutils.spawn import find_executable
 
 print('Node.js configure: Found Python {}.{}.{}...'.format(*sys.version_info))
 acceptable_pythons = ((3, 9), (3, 8), (3, 7), (3, 6))
 if sys.version_info[:2] in acceptable_pythons:
+  import configure
+elif sys.version_info[:2] == (2, 7) and 'FORCE_PYTHON2' in os.environ:
+  sys.stderr.write('Forced use of unsupported Python 2.7.\n')
   import configure
 else:
   python_cmds = ['python{}.{}'.format(*vers) for vers in acceptable_pythons]
