@@ -6,11 +6,11 @@
 # When a 'which' call is made for a specific version of Python on Travis CI,
 # pyenv will alert which shims are available and then will fail the build.
 _=[ 'exec' '/bin/sh' '-c' '''
-test ${TRAVIS} && exec python "$0" "$@"  # workaround for pyenv on Travis CI
 which python2.7 >/dev/null && exec python2.7 "$0" "$@"
+which python3.9 >/dev/null && exec python3.9 "$0" "$@"
+which python3.8 >/dev/null && exec python3.8 "$0" "$@"
 which python3.7 >/dev/null && exec python3.7 "$0" "$@"
 which python3.6 >/dev/null && exec python3.6 "$0" "$@"
-which python3.5 >/dev/null && exec python3.5 "$0" "$@"
 exec python "$0" "$@"
 ''' "$0" "$@"
 ]
@@ -20,7 +20,7 @@ import sys
 from distutils.spawn import find_executable
 
 print('Node configure: Found Python {0}.{1}.{2}...'.format(*sys.version_info))
-acceptable_pythons = ((2, 7), (3, 7), (3, 6), (3, 5))
+acceptable_pythons = ((2, 7), (3, 9), (3, 8), (3, 7), (3, 6))
 if sys.version_info[:2] in acceptable_pythons:
   import configure
 else:
