@@ -356,6 +356,10 @@
       'target_name': 'v8_snapshot',
       'type': 'static_library',
       'toolsets': ['target'],
+      'dependencies': [
+        'v8_shared_internal_headers',
+	'v8_libbase',
+      ],
       'conditions': [
         ['want_separate_host_toolset', {
           'conditions': [
@@ -1439,6 +1443,7 @@
         'v8_libbase',
         'v8_libplatform',
         'v8_maybe_icu',
+        'v8_shared_internal_headers',
         # "build/win:default_exe_manifest",
       ],
       'sources': [
