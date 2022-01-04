@@ -62,7 +62,7 @@ const { sleep } = require('internal/util');
       histogram.disable();
       // The values are non-deterministic, so we just check that a value is
       // present, as opposed to a specific value.
-      assert(histogram.min > 0);
+      assert(histogram.min > 0, `histogram.min (${histogram.min}) > 0`);
       assert(histogram.max > 0);
       assert(histogram.stddev > 0);
       assert(histogram.mean > 0);
