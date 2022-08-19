@@ -363,17 +363,17 @@ class TapProgressIndicator(SimpleProgressIndicator):
       self.exitcode = output.output.exit_code
       self.traceback = output.output.stdout + output.output.stderr
 
-      if FLAKY in output.test.outcomes and self.flaky_tests_mode == DONTCARE:
-        status_line = status_line + ' # TODO : Fix flaky test'
-        self.severity = 'flaky'
-
-      logger.info(status_line)
-
       if output.HasCrashed():
         self.severity = 'crashed'
 
       elif output.HasTimedOut():
         self.severity = 'fail'
+
+      if FLAKY in output.test.outcomes and self.flaky_tests_mode == DONTCARE:
+        status_line = status_line + ' # TODO : Fix flaky test'
+        self.severity = 'flaky'
+
+      logger.info(status_line)
 
     else:
       skip = skip_regex.search(output.output.stdout)
