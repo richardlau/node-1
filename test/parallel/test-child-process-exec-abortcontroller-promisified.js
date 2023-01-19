@@ -11,7 +11,7 @@ const invalidArgTypeError = {
   name: 'TypeError'
 };
 
-const waitCommand = common.isLinux ?
+const waitCommand = !common.isWindows ?
   'sleep 2m' :
   `${process.execPath} -e "setInterval(()=>{}, 99)"`;
 
