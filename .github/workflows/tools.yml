@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   tools-deps-update:
-    if: github.repository == 'nodejs/node'
+    if: github.repository == 'richardlau/node-1'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false  # Prevent other jobs from aborting if one fails
