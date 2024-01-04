@@ -13,6 +13,8 @@
 #include "src/compiler/turboshaft/assembler.h"
 #include "src/compiler/turboshaft/index.h"
 #include "src/compiler/turboshaft/operations.h"
+#include "src/compiler/turboshaft/phase.h"
+#include "src/compiler/turboshaft/wasm-assembler-helpers.h"
 #include "src/wasm/wasm-engine.h"
 #include "src/wasm/wasm-module.h"
 #include "src/wasm/wasm-objects.h"
@@ -21,10 +23,6 @@
 namespace v8::internal::compiler::turboshaft {
 
 #include "src/compiler/turboshaft/define-assembler-macros.inc"
-
-#define LOAD_INSTANCE_FIELD(instance_node, name, representation)     \
-  __ Load(instance_node, LoadOp::Kind::TaggedBase(), representation, \
-          WasmInstanceObject::k##name##Offset);
 
 template <class Next>
 class WasmLoweringReducer : public Next {
@@ -49,6 +47,7 @@ class WasmLoweringReducer : public Next {
         wasm::GetWasmEngine()->compressed_wasm_null_value_or_zero();
     OpIndex null_value =
         !wasm::IsSubtypeOf(type, wasm::kWasmExternRef, module_) &&
+                !wasm::IsSubtypeOf(type, wasm::kWasmExnRef, module_) &&
                 static_null != 0
             ? __ UintPtrConstant(static_null)
             : Null(type);
@@ -66,7 +65,8 @@ class WasmLoweringReducer : public Next {
         // (3) the object might be a JS object.
         if (null_check_strategy_ == NullCheckStrategy::kExplicit ||
             wasm::IsSubtypeOf(wasm::kWasmI31Ref.AsNonNull(), type, module_) ||
-            wasm::IsSubtypeOf(type, wasm::kWasmExternRef, module_)) {
+            wasm::IsSubtypeOf(type, wasm::kWasmExternRef, module_) ||
+            wasm::IsSubtypeOf(type, wasm::kWasmExnRef, module_)) {
           __ TrapIf(__ IsNull(object, type), OpIndex::Invalid(), trap_id);
         } else {
           // Otherwise, load the word after the map word.
@@ -83,11 +83,9 @@ class WasmLoweringReducer : public Next {
     return object;
   }
 
-  OpIndex REDUCE(RttCanon)(OpIndex instance, uint32_t type_index) {
-    OpIndex maps_list = LOAD_INSTANCE_FIELD(
-        instance, ManagedObjectMaps, MemoryRepresentation::TaggedPointer());
+  OpIndex REDUCE(RttCanon)(OpIndex rtts, uint32_t type_index) {
     int map_offset = FixedArray::kHeaderSize + type_index * kTaggedSize;
-    return __ Load(maps_list, LoadOp::Kind::TaggedBase(),
+    return __ Load(rtts, LoadOp::Kind::TaggedBase().Immutable(),
                    MemoryRepresentation::AnyTagged(), map_offset);
   }
 
@@ -109,7 +107,7 @@ class WasmLoweringReducer : public Next {
     }
   }
 
-  OpIndex REDUCE(ExternInternalize)(V<Tagged> object) {
+  OpIndex REDUCE(AnyConvertExtern)(V<Tagged> object) {
     Label<Tagged> end_label(&Asm());
     Label<> null_label(&Asm());
     Label<> smi_label(&Asm());
@@ -191,7 +189,7 @@ class WasmLoweringReducer : public Next {
     return result;
   }
 
-  OpIndex REDUCE(ExternExternalize)(V<Tagged> object) {
+  OpIndex REDUCE(ExternConvertAny)(V<Tagged> object) {
     Label<Tagged> end(&Asm());
     GOTO_IF_NOT(__ IsNull(object, wasm::kWasmAnyRef), end, object);
     GOTO(end, Null(wasm::kWasmExternRef));
@@ -199,9 +197,14 @@ class WasmLoweringReducer : public Next {
     return result;
   }
 
+  OpIndex REDUCE(WasmTypeAnnotation)(OpIndex value, wasm::ValueType type) {
+    // Remove type annotation operations as they are not needed any more.
+    return value;
+  }
+
   OpIndex REDUCE(StructGet)(OpIndex object, const wasm::StructType* type,
-                            int field_index, bool is_signed,
-                            CheckForNull null_check) {
+                            uint32_t type_index, int field_index,
+                            bool is_signed, CheckForNull null_check) {
     auto [explicit_null_check, implicit_null_check] =
         null_checks_for_struct_op(null_check, field_index);
 
@@ -219,8 +222,8 @@ class WasmLoweringReducer : public Next {
   }
 
   OpIndex REDUCE(StructSet)(OpIndex object, OpIndex value,
-                            const wasm::StructType* type, int field_index,
-                            CheckForNull null_check) {
+                            const wasm::StructType* type, uint32_t type_index,
+                            int field_index, CheckForNull null_check) {
     auto [explicit_null_check, implicit_null_check] =
         null_checks_for_struct_op(null_check, field_index);
 
@@ -278,6 +281,78 @@ class WasmLoweringReducer : public Next {
 
     return __ Load(array, load_kind, RepresentationFor(wasm::kWasmI32, true),
                    WasmArray::kLengthOffset);
+  }
+
+  OpIndex REDUCE(WasmAllocateArray)(V<Map> rtt, V<Word32> length,
+                                    const wasm::ArrayType* array_type) {
+    __ TrapIfNot(
+        __ Uint32LessThanOrEqual(
+            length, __ Word32Constant(WasmArray::MaxLength(array_type))),
+        OpIndex::Invalid(), TrapId::kTrapArrayTooLarge);
+    wasm::ValueType element_type = array_type->element_type();
+
+    // RoundUp(length * value_size, kObjectAlignment) =
+    //   RoundDown(length * value_size + kObjectAlignment - 1,
+    //             kObjectAlignment);
+    V<Word32> padded_length = __ Word32BitwiseAnd(
+        __ Word32Add(__ Word32Mul(length, __ Word32Constant(
+                                              element_type.value_kind_size())),
+                     __ Word32Constant(int32_t{kObjectAlignment - 1})),
+        __ Word32Constant(int32_t{-kObjectAlignment}));
+    Uninitialized<HeapObject> a = __ Allocate(
+        __ ChangeUint32ToUintPtr(__ Word32Add(
+            padded_length, __ Word32Constant(WasmArray::kHeaderSize))),
+        AllocationType::kYoung);
+
+    // TODO(14108): The map and empty fixed array initialization should be an
+    // immutable store.
+    __ InitializeField(a, AccessBuilder::ForMap(compiler::kNoWriteBarrier),
+                       rtt);
+    __ InitializeField(a, AccessBuilder::ForJSObjectPropertiesOrHash(),
+                       LOAD_ROOT(EmptyFixedArray));
+    __ InitializeField(a, AccessBuilder::ForWasmArrayLength(), length);
+
+    // Note: Only the array header initialization is finished here, the elements
+    // still need to be initialized by other code.
+    V<HeapObject> array = __ FinishInitialization(std::move(a));
+    return array;
+  }
+
+  OpIndex REDUCE(WasmAllocateStruct)(V<Map> rtt,
+                                     const wasm::StructType* struct_type) {
+    int size = WasmStruct::Size(struct_type);
+    Uninitialized<HeapObject> s = __ Allocate(size, AllocationType::kYoung);
+    __ InitializeField(s, AccessBuilder::ForMap(compiler::kNoWriteBarrier),
+                       rtt);
+    __ InitializeField(s, AccessBuilder::ForJSObjectPropertiesOrHash(),
+                       LOAD_ROOT(EmptyFixedArray));
+    // Note: Struct initialization isn't finished here, the user defined fields
+    // still need to be initialized by other operations.
+    V<HeapObject> struct_value = __ FinishInitialization(std::move(s));
+    return struct_value;
+  }
+
+  OpIndex REDUCE(WasmRefFunc)(V<Tagged> wasm_instance,
+                              uint32_t function_index) {
+    V<FixedArray> functions =
+        LOAD_IMMUTABLE_INSTANCE_FIELD(wasm_instance, WasmInternalFunctions,
+                                      MemoryRepresentation::TaggedPointer());
+    V<Tagged> maybe_function =
+        __ LoadFixedArrayElement(functions, function_index);
+
+    Label<WasmInternalFunction> done(&Asm());
+    IF (UNLIKELY(__ IsSmi(maybe_function))) {
+      V<Word32> function_index_constant = __ Word32Constant(function_index);
+      V<WasmInternalFunction> from_builtin = __ CallBuiltin(
+          Builtin::kWasmRefFunc, {function_index_constant}, Operator::kNoThrow);
+      GOTO(done, from_builtin);
+    }
+    ELSE {
+      GOTO(done, V<WasmInternalFunction>::Cast(maybe_function));
+    }
+    END_IF
+    BIND(done, result_value);
+    return result_value;
   }
 
   OpIndex REDUCE(StringAsWtf16)(OpIndex string) {
@@ -775,12 +850,12 @@ class WasmLoweringReducer : public Next {
         if (mode == GlobalMode::kLoad) {
           return __ Load(base, index_ptr, LoadOp::Kind::TaggedBase(),
                          MemoryRepresentation::AnyTagged(),
-                         FixedArray::kObjectsOffset, kTaggedSizeLog2);
+                         FixedArray::OffsetOfElementAt(0), kTaggedSizeLog2);
         } else {
           __ Store(base, index_ptr, value, StoreOp::Kind::TaggedBase(),
                    MemoryRepresentation::AnyTagged(),
                    WriteBarrierKind::kFullWriteBarrier,
-                   FixedArray::kObjectsOffset, kTaggedSizeLog2);
+                   FixedArray::OffsetOfElementAt(0), kTaggedSizeLog2);
           return OpIndex::Invalid();
         }
       } else {
@@ -828,9 +903,11 @@ class WasmLoweringReducer : public Next {
 
   OpIndex Null(wasm::ValueType type) {
     OpIndex roots = __ LoadRootRegister();
-    RootIndex index = wasm::IsSubtypeOf(type, wasm::kWasmExternRef, module_)
-                          ? RootIndex::kNullValue
-                          : RootIndex::kWasmNull;
+    RootIndex index =
+        wasm::IsSubtypeOf(type, wasm::kWasmExternRef, module_) ||
+                wasm::IsSubtypeOf(type, wasm::kWasmExnRef, module_)
+            ? RootIndex::kNullValue
+            : RootIndex::kWasmNull;
     return __ Load(roots, LoadOp::Kind::RawAligned().Immutable(),
                    MemoryRepresentation::PointerSized(),
                    IsolateData::root_slot_offset(index));

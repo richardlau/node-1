@@ -183,7 +183,7 @@ int32_t weekdayFromEDaysOfWeek(icu::Calendar::EDaysOfWeek eDaysOfWeek) {
 bool JSLocale::Is38AlphaNumList(const std::string& in) {
   std::string value = in;
   while (true) {
-    std::size_t found_dash = value.find("-");
+    std::size_t found_dash = value.find('-');
     if (found_dash == std::string::npos) {
       return IsAlphanum(value, 3, 8);
     }
@@ -729,7 +729,7 @@ MaybeHandle<JSObject> JSLocale::GetWeekInfo(Isolate* isolate,
     }
   }
   if (length != 2) {
-    wi = wi->ShrinkOrEmpty(isolate, wi, length);
+    wi = wi->RightTrimOrEmpty(isolate, wi, length);
   }
   Handle<JSArray> we = factory->NewJSArrayWithElements(wi);
 

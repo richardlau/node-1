@@ -59,13 +59,15 @@
                                                                                \
   /* Special constructor for constexpr construction which allows skipping type \
    * checks. */                                                                \
-  explicit constexpr inline Type(Address ptr, HeapObject::SkipTypeCheckTag)    \
+  explicit constexpr V8_INLINE Type(Address ptr, HeapObject::SkipTypeCheckTag) \
       : __VA_ARGS__(ptr, HeapObject::SkipTypeCheckTag()) {}                    \
                                                                                \
+  inline void CheckTypeOnCast();                                               \
   explicit inline Type(Address ptr)
 
-#define OBJECT_CONSTRUCTORS_IMPL(Type, Super) \
-  inline Type::Type(Address ptr) : Super(ptr) { SLOW_DCHECK(Is##Type(*this)); }
+#define OBJECT_CONSTRUCTORS_IMPL(Type, Super)                           \
+  inline void Type::CheckTypeOnCast() { SLOW_DCHECK(Is##Type(*this)); } \
+  inline Type::Type(Address ptr) : Super(ptr) { CheckTypeOnCast(); }
 
 #define NEVER_READ_ONLY_SPACE   \
   inline Heap* GetHeap() const; \
@@ -442,7 +444,7 @@
     TaggedField<Smi, offset>::Release_Store(*this, Smi::FromInt(value)); \
   }
 
-#define DECL_RELAXED_SMI_ACCESSORS(name) \
+#define DECL_RELAXED_INT_ACCESSORS(name) \
   inline int name(RelaxedLoadTag) const; \
   inline void set_##name(int value, RelaxedStoreTag);
 
@@ -478,23 +480,25 @@
   }
 
 // Host objects in ReadOnlySpace can't define the isolate-less accessor.
-#define DECL_EXTERNAL_POINTER_ACCESSORS_MAYBE_READ_ONLY_HOST(name, type)  \
-  inline type name(i::Isolate* isolate_for_sandbox) const;                \
-  inline void init_##name(i::Isolate* isolate, const type initial_value); \
-  inline void set_##name(i::Isolate* isolate, const type value);
+#define DECL_EXTERNAL_POINTER_ACCESSORS_MAYBE_READ_ONLY_HOST(name, type) \
+  inline type name(i::IsolateForSandbox isolate) const;                  \
+  inline void init_##name(i::IsolateForSandbox isolate,                  \
+                          const type initial_value);                     \
+  inline void set_##name(i::IsolateForSandbox isolate, const type value);
 
 // Host objects in ReadOnlySpace can't define the isolate-less accessor.
 #define EXTERNAL_POINTER_ACCESSORS_MAYBE_READ_ONLY_HOST(holder, name, type, \
                                                         offset, tag)        \
-  type holder::name(i::Isolate* isolate_for_sandbox) const {                \
+  type holder::name(i::IsolateForSandbox isolate) const {                   \
     /* This is a workaround for MSVC error C2440 not allowing  */           \
     /* reinterpret casts to the same type. */                               \
     struct C2440 {};                                                        \
-    Address result = HeapObject::ReadExternalPointerField<tag>(             \
-        offset, isolate_for_sandbox);                                       \
+    Address result =                                                        \
+        HeapObject::ReadExternalPointerField<tag>(offset, isolate);         \
     return reinterpret_cast<type>(reinterpret_cast<C2440*>(result));        \
   }                                                                         \
-  void holder::init_##name(i::Isolate* isolate, const type initial_value) { \
+  void holder::init_##name(i::IsolateForSandbox isolate,                    \
+                           const type initial_value) {                      \
     /* This is a workaround for MSVC error C2440 not allowing  */           \
     /* reinterpret casts to the same type. */                               \
     struct C2440 {};                                                        \
@@ -502,7 +506,7 @@
         reinterpret_cast<const C2440*>(initial_value));                     \
     HeapObject::InitExternalPointerField<tag>(offset, isolate, the_value);  \
   }                                                                         \
-  void holder::set_##name(i::Isolate* isolate, const type value) {          \
+  void holder::set_##name(i::IsolateForSandbox isolate, const type value) { \
     /* This is a workaround for MSVC error C2440 not allowing  */           \
     /* reinterpret casts to the same type. */                               \
     struct C2440 {};                                                        \
@@ -517,11 +521,53 @@
 
 #define EXTERNAL_POINTER_ACCESSORS(holder, name, type, offset, tag)           \
   type holder::name() const {                                                 \
-    i::Isolate* isolate_for_sandbox = GetIsolateForSandbox(*this);            \
-    return holder::name(isolate_for_sandbox);                                 \
+    i::IsolateForSandbox isolate = GetIsolateForSandbox(*this);               \
+    return holder::name(isolate);                                             \
   }                                                                           \
   EXTERNAL_POINTER_ACCESSORS_MAYBE_READ_ONLY_HOST(holder, name, type, offset, \
                                                   tag)
+
+#define DECL_TRUSTED_POINTER_ACCESSORS(name, type)                           \
+  /* Trusted pointers currently always have release-acquire semantics. */    \
+  /* However, we still expose explicit release-acquire accessors so it */    \
+  /* can be made clear when they are required. */                            \
+  /* If desired, we could create separate {Read|Write}TrustedPointer */      \
+  /* routines for relaxed- and release-acquire semantics in the future. */   \
+  inline Tagged<type> name(IsolateForSandbox isolate) const;                 \
+  inline Tagged<type> name(IsolateForSandbox isolate, AcquireLoadTag) const; \
+  inline void set_##name(Tagged<type> value,                                 \
+                         WriteBarrierMode mode = UPDATE_WRITE_BARRIER);      \
+  inline void set_##name(Tagged<type> value, ReleaseStoreTag,                \
+                         WriteBarrierMode mode = UPDATE_WRITE_BARRIER);      \
+  inline bool has_##name() const;                                            \
+  inline void clear_##name();
+
+#define TRUSTED_POINTER_ACCESSORS(holder, name, type, offset, tag)             \
+  Tagged<type> holder::name(IsolateForSandbox isolate) const {                 \
+    return name(isolate, kAcquireLoad);                                        \
+  }                                                                            \
+  Tagged<type> holder::name(IsolateForSandbox isolate, AcquireLoadTag) const { \
+    DCHECK(has_##name());                                                      \
+    return type::cast(ReadTrustedPointerField<tag>(offset, isolate));          \
+  }                                                                            \
+  void holder::set_##name(Tagged<type> value, WriteBarrierMode mode) {         \
+    set_##name(value, kReleaseStore, mode);                                    \
+  }                                                                            \
+  void holder::set_##name(Tagged<type> value, ReleaseStoreTag,                 \
+                          WriteBarrierMode mode) {                             \
+    WriteTrustedPointerField<tag>(offset, value);                              \
+    CONDITIONAL_TRUSTED_POINTER_WRITE_BARRIER(*this, offset, tag, value,       \
+                                              mode);                           \
+  }                                                                            \
+  bool holder::has_##name() const {                                            \
+    return !IsTrustedPointerFieldCleared(offset);                              \
+  }                                                                            \
+  void holder::clear_##name() { ClearTrustedPointerField(offset); }
+
+#define DECL_CODE_POINTER_ACCESSORS(name) \
+  DECL_TRUSTED_POINTER_ACCESSORS(name, Code)
+#define CODE_POINTER_ACCESSORS(holder, name, offset) \
+  TRUSTED_POINTER_ACCESSORS(holder, name, Code, offset, kCodeIndirectPointerTag)
 
 #define BIT_FIELD_ACCESSORS2(holder, get_field, set_field, name, BitField) \
   typename BitField::FieldType holder::name() const {                      \
@@ -579,25 +625,26 @@
 
 #ifdef V8_DISABLE_WRITE_BARRIERS
 #define WRITE_BARRIER(object, offset, value)
+#define WRITE_BARRIER_CPP(object, offset, value)
 #else
-#define WRITE_BARRIER(object, offset, value)                        \
-  do {                                                              \
-    DCHECK_NOT_NULL(GetHeapFromWritableObject(object));             \
-    static_assert(kTaggedCanConvertToRawObjects);                   \
-    CombinedWriteBarrier(object, (object)->RawField(offset), value, \
-                         UPDATE_WRITE_BARRIER);                     \
+#define WRITE_BARRIER(object, offset, value)                              \
+  do {                                                                    \
+    DCHECK_NOT_NULL(GetHeapFromWritableObject(object));                   \
+    static_assert(kTaggedCanConvertToRawObjects);                         \
+    CombinedWriteBarrier(object, Tagged(object)->RawField(offset), value, \
+                         UPDATE_WRITE_BARRIER);                           \
   } while (false)
 #endif
 
 #ifdef V8_DISABLE_WRITE_BARRIERS
 #define WEAK_WRITE_BARRIER(object, offset, value)
 #else
-#define WEAK_WRITE_BARRIER(object, offset, value)                            \
-  do {                                                                       \
-    DCHECK_NOT_NULL(GetHeapFromWritableObject(object));                      \
-    static_assert(kTaggedCanConvertToRawObjects);                            \
-    CombinedWriteBarrier(object, (object)->RawMaybeWeakField(offset), value, \
-                         UPDATE_WRITE_BARRIER);                              \
+#define WEAK_WRITE_BARRIER(object, offset, value)                           \
+  do {                                                                      \
+    DCHECK_NOT_NULL(GetHeapFromWritableObject(object));                     \
+    static_assert(kTaggedCanConvertToRawObjects);                           \
+    CombinedWriteBarrier(object, Tagged(object)->RawMaybeWeakField(offset), \
+                         value, UPDATE_WRITE_BARRIER);                      \
   } while (false)
 #endif
 
@@ -678,6 +725,19 @@
         object, (object).RawIndirectPointerField(offset, tag), value, mode);   \
   } while (false)
 #endif
+
+#ifdef V8_ENABLE_SANDBOX
+#define CONDITIONAL_TRUSTED_POINTER_WRITE_BARRIER(object, offset, tag, value, \
+                                                  mode)                       \
+  CONDITIONAL_INDIRECT_POINTER_WRITE_BARRIER(object, offset, tag, value, mode)
+#else
+#define CONDITIONAL_TRUSTED_POINTER_WRITE_BARRIER(object, offset, tag, value, \
+                                                  mode)                       \
+  CONDITIONAL_WRITE_BARRIER(*this, offset, value, mode);
+#endif
+#define CONDITIONAL_CODE_POINTER_WRITE_BARRIER(object, offset, value, mode) \
+  CONDITIONAL_TRUSTED_POINTER_WRITE_BARRIER(                                \
+      object, offset, kCodeIndirectPointerTag, value, mode)
 
 #define ACQUIRE_READ_INT8_FIELD(p, offset) \
   static_cast<int8_t>(base::Acquire_Load(  \

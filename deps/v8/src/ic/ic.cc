@@ -151,17 +151,18 @@ void IC::TraceIC(const char* type, Handle<Object> name, State old_state,
 
   int code_offset = 0;
   Tagged<AbstractCode> code = function->abstract_code(isolate_);
-  if (function->ActiveTierIsIgnition()) {
+  if (function->ActiveTierIsIgnition(isolate())) {
     code_offset = InterpretedFrame::GetBytecodeOffset(frame->fp());
-  } else if (function->ActiveTierIsBaseline()) {
+  } else if (function->ActiveTierIsBaseline(isolate())) {
     // TODO(pthier): AbstractCode should fully support Baseline code.
     BaselineFrame* baseline_frame = BaselineFrame::cast(frame);
     code_offset = baseline_frame->GetBytecodeOffset();
     code = AbstractCode::cast(baseline_frame->GetBytecodeArray());
   } else {
-    code_offset = static_cast<int>(frame->pc() - function->instruction_start());
+    code_offset =
+        static_cast<int>(frame->pc() - function->instruction_start(isolate()));
   }
-  JavaScriptFrame::CollectFunctionAndOffsetForICStats(function, code,
+  JavaScriptFrame::CollectFunctionAndOffsetForICStats(isolate(), function, code,
                                                       code_offset);
 
   // Reserve enough space for IC transition state, the longest length is 17.
@@ -314,22 +315,7 @@ void IC::OnFeedbackChanged(Isolate* isolate, Tagged<FeedbackVector> vector,
                            FeedbackSlot slot, const char* reason) {
 #ifdef V8_TRACE_FEEDBACK_UPDATES
   if (v8_flags.trace_feedback_updates) {
-    int slot_count = vector->metadata()->slot_count();
-    StdoutStream os;
-    if (slot.IsInvalid()) {
-      os << "[Feedback slots in ";
-    } else {
-      os << "[Feedback slot " << slot.ToInt() << "/" << slot_count << " in ";
-    }
-    ShortPrint(vector->shared_function_info(), os);
-    if (slot.IsInvalid()) {
-      os << " updated - ";
-    } else {
-      os << " updated to ";
-      vector->FeedbackSlotPrint(os, slot);
-      os << " - ";
-    }
-    os << reason << "]" << std::endl;
+    FeedbackVector::TraceFeedbackChange(isolate, vector, slot, reason);
   }
 #endif
 
@@ -493,9 +479,8 @@ MaybeHandle<Object> LoadGlobalIC::Load(Handle<Name> name,
 
     VariableLookupResult lookup_result;
     if (script_contexts->Lookup(str_name, &lookup_result)) {
-      Handle<Context> script_context = ScriptContextTable::GetContext(
-          isolate(), script_contexts, lookup_result.context_index);
-
+      Handle<Context> script_context(
+          script_contexts->get(lookup_result.context_index), isolate());
       Handle<Object> result(script_context->get(lookup_result.slot_index),
                             isolate());
 
@@ -1625,18 +1610,22 @@ MaybeHandle<Object> StoreGlobalIC::Store(Handle<Name> name,
 
   VariableLookupResult lookup_result;
   if (script_contexts->Lookup(str_name, &lookup_result)) {
-    Handle<Context> script_context = ScriptContextTable::GetContext(
-        isolate(), script_contexts, lookup_result.context_index);
+    DisallowGarbageCollection no_gc;
+    DisableGCMole no_gcmole;
+    Tagged<Context> script_context =
+        script_contexts->get(lookup_result.context_index);
     if (lookup_result.mode == VariableMode::kConst) {
+      AllowGarbageCollection yes_gc;
       return TypeError(MessageTemplate::kConstAssign, global, name);
     }
 
-    Handle<Object> previous_value(script_context->get(lookup_result.slot_index),
-                                  isolate());
+    Tagged<Object> previous_value =
+        script_context->get(lookup_result.slot_index);
 
-    if (IsTheHole(*previous_value, isolate())) {
-      // Do not install stubs and stay pre-monomorphic for
-      // uninitialized accesses.
+    if (IsTheHole(previous_value, isolate())) {
+      // Do not install stubs and stay pre-monomorphic for uninitialized
+      // accesses.
+      AllowGarbageCollection yes_gc;
       THROW_NEW_ERROR(
           isolate(),
           NewReferenceError(MessageTemplate::kAccessedUninitializedVariable,
@@ -2280,7 +2269,8 @@ Handle<Object> KeyedStoreIC::StoreElementHandler(
   // initializing store to array literal.
   DCHECK_IMPLIES(
       !receiver_map->has_dictionary_elements() &&
-          receiver_map->MayHaveReadOnlyElementsInPrototypeChain(isolate()),
+          receiver_map->ShouldCheckForReadOnlyElementsInPrototypeChain(
+              isolate()),
       IsStoreInArrayLiteralIC());
 
   if (IsJSProxyMap(*receiver_map)) {
@@ -2361,7 +2351,8 @@ void KeyedStoreIC::StoreElementPolymorphicHandlers(
     Handle<Map> transition;
 
     if (receiver_map->instance_type() < FIRST_JS_RECEIVER_TYPE ||
-        receiver_map->MayHaveReadOnlyElementsInPrototypeChain(isolate())) {
+        receiver_map->ShouldCheckForReadOnlyElementsInPrototypeChain(
+            isolate())) {
       // TODO(mvstanton): Consider embedding store_mode in the state of the slow
       // keyed store ic for uniformity.
       TRACE_HANDLER_STATS(isolate(), KeyedStoreIC_SlowStub);
@@ -2532,7 +2523,7 @@ MaybeHandle<Object> KeyedStoreIC::Store(Handle<Object> object,
           : Runtime::SetObjectProperty(isolate(), object, key, value,
                                        StoreOrigin::kMaybeKeyed);
   if (result.is_null()) {
-    DCHECK(isolate()->has_pending_exception());
+    DCHECK(isolate()->has_exception());
     set_slow_stub_reason("failed to set property");
     use_ic = false;
   }
@@ -2554,8 +2545,9 @@ MaybeHandle<Object> KeyedStoreIC::Store(Handle<Object> object,
         if (old_receiver_map->is_abandoned_prototype_map()) {
           set_slow_stub_reason("receiver with prototype map");
         } else if (old_receiver_map->has_dictionary_elements() ||
-                   !old_receiver_map->MayHaveReadOnlyElementsInPrototypeChain(
-                       isolate())) {
+                   !old_receiver_map
+                        ->ShouldCheckForReadOnlyElementsInPrototypeChain(
+                            isolate())) {
           // We should go generic if receiver isn't a dictionary, but our
           // prototype chain does have dictionary elements. This ensures that
           // other non-dictionary receivers in the polymorphic case benefit
@@ -2809,6 +2801,7 @@ RUNTIME_FUNCTION(Runtime_StoreIC_Miss) {
   Handle<FeedbackVector> vector = Handle<FeedbackVector>();
   if (!IsUndefined(*maybe_vector, isolate)) {
     DCHECK(IsFeedbackVector(*maybe_vector));
+    DCHECK(!vector_slot.IsInvalid());
     vector = Handle<FeedbackVector>::cast(maybe_vector);
     kind = vector->GetKind(vector_slot);
   }
@@ -2837,6 +2830,7 @@ RUNTIME_FUNCTION(Runtime_DefineNamedOwnIC_Miss) {
   Handle<FeedbackVector> vector = Handle<FeedbackVector>();
   if (!IsUndefined(*maybe_vector, isolate)) {
     DCHECK(IsFeedbackVector(*maybe_vector));
+    DCHECK(!vector_slot.IsInvalid());
     vector = Handle<FeedbackVector>::cast(maybe_vector);
     kind = vector->GetKind(vector_slot);
   }
@@ -2930,17 +2924,21 @@ RUNTIME_FUNCTION(Runtime_StoreGlobalIC_Slow) {
 
   VariableLookupResult lookup_result;
   if (script_contexts->Lookup(name, &lookup_result)) {
-    Handle<Context> script_context = ScriptContextTable::GetContext(
-        isolate, script_contexts, lookup_result.context_index);
+    DisallowGarbageCollection no_gc;
+    DisableGCMole no_gcmole;
+    Tagged<Context> script_context =
+        script_contexts->get(lookup_result.context_index);
     if (lookup_result.mode == VariableMode::kConst) {
+      AllowGarbageCollection yes_gc;
       THROW_NEW_ERROR_RETURN_FAILURE(
           isolate, NewTypeError(MessageTemplate::kConstAssign, global, name));
     }
 
-    Handle<Object> previous_value(script_context->get(lookup_result.slot_index),
-                                  isolate);
+    Tagged<Object> previous_value =
+        script_context->get(lookup_result.slot_index);
 
-    if (IsTheHole(*previous_value, isolate)) {
+    if (IsTheHole(previous_value, isolate)) {
+      AllowGarbageCollection yes_gc;
       THROW_NEW_ERROR_RETURN_FAILURE(
           isolate, NewReferenceError(
                        MessageTemplate::kAccessedUninitializedVariable, name));
@@ -2960,11 +2958,10 @@ RUNTIME_FUNCTION(Runtime_KeyedStoreIC_Miss) {
   DCHECK_EQ(5, args.length());
   // Runtime functions don't follow the IC's calling convention.
   Handle<Object> value = args.at(0);
-  int slot = args.tagged_index_value_at(1);
   Handle<HeapObject> maybe_vector = args.at<HeapObject>(2);
   Handle<Object> receiver = args.at(3);
   Handle<Object> key = args.at(4);
-  FeedbackSlot vector_slot = FeedbackVector::ToSlot(slot);
+  FeedbackSlot vector_slot;
 
   // When the feedback vector is not valid the slot can only be of type
   // StoreKeyed. Storing in array literals falls back to
@@ -2977,6 +2974,8 @@ RUNTIME_FUNCTION(Runtime_KeyedStoreIC_Miss) {
   if (!IsUndefined(*maybe_vector, isolate)) {
     DCHECK(IsFeedbackVector(*maybe_vector));
     vector = Handle<FeedbackVector>::cast(maybe_vector);
+    int slot = args.tagged_index_value_at(1);
+    vector_slot = FeedbackVector::ToSlot(slot);
     kind = vector->GetKind(vector_slot);
   }
 
@@ -3382,7 +3381,7 @@ RUNTIME_FUNCTION(Runtime_StoreCallbackProperty) {
   PropertyCallbackArguments arguments(isolate, info->data(), *receiver, *holder,
                                       Nothing<ShouldThrow>());
   arguments.CallAccessorSetter(info, name, value);
-  RETURN_FAILURE_IF_SCHEDULED_EXCEPTION(isolate);
+  RETURN_FAILURE_IF_EXCEPTION(isolate);
   return *value;
 }
 
@@ -3409,7 +3408,7 @@ RUNTIME_FUNCTION(Runtime_LoadPropertyWithInterceptor) {
 
     Handle<Object> result = arguments.CallNamedGetter(interceptor, name);
 
-    RETURN_FAILURE_IF_SCHEDULED_EXCEPTION_DETECTOR(isolate, arguments);
+    RETURN_FAILURE_IF_EXCEPTION_DETECTOR(isolate, arguments);
 
     if (!result.is_null()) {
       arguments.AcceptSideEffects();
@@ -3475,7 +3474,7 @@ RUNTIME_FUNCTION(Runtime_StorePropertyWithInterceptor) {
                                         *receiver, Just(kDontThrow));
 
     Handle<Object> result = arguments.CallNamedSetter(interceptor, name, value);
-    RETURN_FAILURE_IF_SCHEDULED_EXCEPTION_DETECTOR(isolate, arguments);
+    RETURN_FAILURE_IF_EXCEPTION_DETECTOR(isolate, arguments);
     if (!result.is_null()) return *value;
     // If the interceptor didn't handle the request, then there must be no
     // side effects.
@@ -3509,7 +3508,7 @@ RUNTIME_FUNCTION(Runtime_LoadElementWithInterceptor) {
                                       *receiver, Just(kDontThrow));
   Handle<Object> result = arguments.CallIndexedGetter(interceptor, index);
 
-  RETURN_FAILURE_IF_SCHEDULED_EXCEPTION_DETECTOR(isolate, arguments);
+  RETURN_FAILURE_IF_EXCEPTION_DETECTOR(isolate, arguments);
 
   if (result.is_null()) {
     LookupIterator it(isolate, receiver, index, receiver);

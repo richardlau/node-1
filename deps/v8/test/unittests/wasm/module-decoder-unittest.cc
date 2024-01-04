@@ -1052,6 +1052,24 @@ TEST_F(WasmModuleVerifyTest, TypeCanonicalization) {
   EXPECT_FAILURE_WITH_MSG(
       non_identical_group,
       "type error in constant expression[0] (expected (ref 0), got (ref 1))");
+
+  static const uint8_t empty_group[] = {
+      SECTION(Type,            // --
+              ENTRY_COUNT(1),  // one rec. group
+              kWasmRecursiveTypeGroupCode, ENTRY_COUNT(0))};
+
+  EXPECT_VERIFIES(empty_group);
+
+  static const uint8_t mixed_empty_and_nonempty_groups[] = {SECTION(
+      Type,                                         // --
+      ENTRY_COUNT(4),                               // one rec. group
+      kWasmRecursiveTypeGroupCode, ENTRY_COUNT(0),  // empty
+      SIG_ENTRY_v_v,                                // one type
+      kWasmRecursiveTypeGroupCode, ENTRY_COUNT(0),  // empty
+      SIG_ENTRY_v_v                                 // one type
+      )};
+
+  EXPECT_VERIFIES(mixed_empty_and_nonempty_groups);
 }
 
 // Tests that all types in a rec. group are checked for supertype validity.

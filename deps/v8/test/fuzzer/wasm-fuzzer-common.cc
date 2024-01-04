@@ -112,7 +112,7 @@ void ExecuteAgainstReference(Isolate* isolate,
              ->SyncInstantiate(isolate, &thrower, module_ref, {},
                                {})  // no imports & memory
              .ToHandle(&instance_ref)) {
-      isolate->clear_pending_exception();
+      isolate->clear_exception();
       thrower.Reset();  // Ignore errors.
       return;
     }
@@ -257,6 +257,10 @@ std::string HeapTypeToConstantName(HeapType heap_type) {
       return "kWasmNullFuncRef";
     case HeapType::kNoExtern:
       return "kWasmNullExternRef";
+    case HeapType::kExn:
+      return "kWasmExnRef";
+    case HeapType::kNoExn:
+      return "kWasmNullExnRef";
     case HeapType::kBottom:
       UNREACHABLE();
     default:
@@ -407,11 +411,11 @@ class InitExprInterface {
   void UnOp(FullDecoder* decoder, WasmOpcode opcode, const Value& value,
             Value* result) {
     switch (opcode) {
-      case kExprExternInternalize:
-        os_ << "kGCPrefix, kExprExternInternalize, ";
+      case kExprAnyConvertExtern:
+        os_ << "kGCPrefix, kExprAnyConvertExtern, ";
         break;
-      case kExprExternExternalize:
-        os_ << "kGCPrefix, kExprExternExternalize, ";
+      case kExprExternConvertAny:
+        os_ << "kGCPrefix, kExprExternConvertAny, ";
         break;
       default:
         UNREACHABLE();
@@ -553,8 +557,7 @@ void GenerateTestCase(Isolate* isolate, ModuleWireBytes wire_bytes,
         "can be\n"
         "// found in the LICENSE file.\n"
         "\n"
-        "// Flags: --wasm-staging --experimental-wasm-gc\n"
-        "// Flags: --experimental-wasm-relaxed-simd\n"
+        "// Flags: --wasm-staging\n"
         "\n"
         "d8.file.execute('test/mjsunit/wasm/wasm-module-builder.js');\n"
         "\n"
@@ -767,7 +770,11 @@ void GenerateTestCase(Isolate* isolate, ModuleWireBytes wire_bytes,
 
   if (compiles) {
     os << "const instance = builder.instantiate();\n"
-          "print(instance.exports.main(1, 2, 3));\n";
+          "try {\n"
+          "  print(instance.exports.main(1, 2, 3));\n"
+          "} catch (e) {\n"
+          "  print('caught exception', e);\n"
+          "}\n";
   } else {
     os << "assertThrows(function() { builder.instantiate(); }, "
           "WebAssembly.CompileError);\n";
@@ -813,9 +820,9 @@ void WasmExecutionFuzzer::FuzzWasmModule(base::Vector<const uint8_t> data,
 
   v8::Isolate::Scope isolate_scope(isolate);
 
-  // Clear any pending exceptions from a prior run.
-  if (i_isolate->has_pending_exception()) {
-    i_isolate->clear_pending_exception();
+  // Clear any exceptions from a prior run.
+  if (i_isolate->has_exception()) {
+    i_isolate->clear_exception();
   }
 
   v8::HandleScope handle_scope(isolate);

@@ -143,6 +143,10 @@ namespace internal {
   TFC(ConstructWithArrayLike_WithFeedback,                                     \
       ConstructWithArrayLike_WithFeedback)                                     \
   ASM(ConstructForwardVarargs, ConstructForwardVarargs)                        \
+  ASM(ConstructForwardAllArgs, ConstructForwardAllArgs)                        \
+  TFC(ConstructForwardAllArgs_Baseline, ConstructForwardAllArgs_Baseline)      \
+  TFC(ConstructForwardAllArgs_WithFeedback,                                    \
+      ConstructForwardAllArgs_WithFeedback)                                    \
   ASM(ConstructFunctionForwardVarargs, ConstructForwardVarargs)                \
   TFC(Construct_Baseline, Construct_Baseline)                                  \
   TFC(Construct_WithFeedback, Construct_WithFeedback)                          \
@@ -181,6 +185,7 @@ namespace internal {
   /* JSFunction in the form of bytecodes */                                    \
   ASM(InterpreterEntryTrampoline, JSTrampoline)                                \
   ASM(InterpreterEntryTrampolineForProfiling, JSTrampoline)                    \
+  ASM(InterpreterForwardAllArgsThenConstruct, ConstructForwardAllArgs)         \
   ASM(InterpreterPushArgsThenCall, InterpreterPushArgsThenCall)                \
   ASM(InterpreterPushUndefinedAndArgsThenCall, InterpreterPushArgsThenCall)    \
   ASM(InterpreterPushArgsThenCallWithFinalSpread, InterpreterPushArgsThenCall) \
@@ -255,6 +260,8 @@ namespace internal {
   /* Adapters for Turbofan into runtime */                                     \
   TFC(AllocateInYoungGeneration, Allocate)                                     \
   TFC(AllocateInOldGeneration, Allocate)                                       \
+  IF_WASM(TFC, WasmAllocateInYoungGeneration, Allocate)                        \
+  IF_WASM(TFC, WasmAllocateInOldGeneration, Allocate)                          \
                                                                                \
   TFC(NewHeapNumber, NewHeapNumber)                                            \
                                                                                \
@@ -289,16 +296,16 @@ namespace internal {
                                                                                \
   /* Handlers */                                                               \
   TFH(KeyedLoadIC_PolymorphicName, LoadWithVector)                             \
-  TFH(KeyedStoreIC_Megamorphic, Store)                                         \
-  TFH(DefineKeyedOwnIC_Megamorphic, Store)                                     \
+  TFH(KeyedStoreIC_Megamorphic, StoreWithVector)                               \
+  TFH(DefineKeyedOwnIC_Megamorphic, StoreNoFeedback)                           \
   TFH(LoadGlobalIC_NoFeedback, LoadGlobalNoFeedback)                           \
   TFH(LoadIC_FunctionPrototype, LoadWithVector)                                \
   TFH(LoadIC_StringLength, LoadWithVector)                                     \
   TFH(LoadIC_StringWrapperLength, LoadWithVector)                              \
   TFH(LoadIC_NoFeedback, LoadNoFeedback)                                       \
   TFH(StoreGlobalIC_Slow, StoreWithVector)                                     \
-  TFH(StoreIC_NoFeedback, Store)                                               \
-  TFH(DefineNamedOwnIC_NoFeedback, Store)                                      \
+  TFH(StoreIC_NoFeedback, StoreNoFeedback)                                     \
+  TFH(DefineNamedOwnIC_NoFeedback, StoreNoFeedback)                            \
   TFH(KeyedLoadIC_SloppyArguments, LoadWithVector)                             \
   TFH(LoadIndexedInterceptorIC, LoadWithVector)                                \
   TFH(KeyedStoreIC_SloppyArguments_Standard, StoreWithVector)                  \
@@ -426,15 +433,6 @@ namespace internal {
   TFJ(ArrayPrototypeValues, kJSArgcReceiverSlots, kReceiver)                   \
   /* ES6 #sec-%arrayiteratorprototype%.next */                                 \
   TFJ(ArrayIteratorPrototypeNext, kJSArgcReceiverSlots, kReceiver)             \
-  /* https://tc39.github.io/proposal-flatMap/#sec-FlattenIntoArray */          \
-  TFS(FlattenIntoArray, NeedsContext::kYes, kTarget, kSource, kSourceLength,   \
-      kStart, kDepth)                                                          \
-  TFS(FlatMapIntoArray, NeedsContext::kYes, kTarget, kSource, kSourceLength,   \
-      kStart, kDepth, kMapperFunction, kThisArg)                               \
-  /* https://tc39.github.io/proposal-flatMap/#sec-Array.prototype.flat */      \
-  TFJ(ArrayPrototypeFlat, kDontAdaptArgumentsSentinel)                         \
-  /* https://tc39.github.io/proposal-flatMap/#sec-Array.prototype.flatMap */   \
-  TFJ(ArrayPrototypeFlatMap, kDontAdaptArgumentsSentinel)                      \
                                                                                \
   /* ArrayBuffer */                                                            \
   /* ES #sec-arraybuffer-constructor */                                        \
@@ -601,6 +599,7 @@ namespace internal {
   CPP(FunctionConstructor)                                                     \
   ASM(FunctionPrototypeApply, JSTrampoline)                                    \
   CPP(FunctionPrototypeBind)                                                   \
+  IF_WASM(CPP, WebAssemblyFunctionPrototypeBind)                               \
   ASM(FunctionPrototypeCall, JSTrampoline)                                     \
   /* ES6 #sec-function.prototype.tostring */                                   \
   CPP(FunctionPrototypeToString)                                               \
@@ -669,6 +668,7 @@ namespace internal {
   TFH(DefineNamedOwnICBaseline, StoreBaseline)                                 \
   TFH(KeyedStoreIC, StoreWithVector)                                           \
   TFH(KeyedStoreICTrampoline, Store)                                           \
+  TFH(KeyedStoreICTrampoline_Megamorphic, Store)                               \
   TFH(KeyedStoreICBaseline, StoreBaseline)                                     \
   TFH(DefineKeyedOwnIC, DefineKeyedOwnWithVector)                              \
   TFH(DefineKeyedOwnICTrampoline, DefineKeyedOwn)                              \
@@ -1009,6 +1009,7 @@ namespace internal {
   IF_WASM(ASM, WasmSuspend, WasmSuspend)                                       \
   IF_WASM(ASM, WasmResume, WasmDummy)                                          \
   IF_WASM(ASM, WasmReject, WasmDummy)                                          \
+  IF_WASM(ASM, WasmTrapHandlerLandingPad, WasmDummy)                           \
   IF_WASM(ASM, WasmCompileLazy, WasmDummy)                                     \
   IF_WASM(ASM, WasmLiftoffFrameSetup, WasmDummy)                               \
   IF_WASM(ASM, WasmDebugBreak, WasmDummy)                                      \
@@ -1046,6 +1047,7 @@ namespace internal {
   CPP(AtomicsMutexConstructor)                                                 \
   CPP(AtomicsMutexIsMutex)                                                     \
   CPP(AtomicsMutexLock)                                                        \
+  CPP(AtomicsMutexLockWithTimeout)                                             \
   CPP(AtomicsMutexTryLock)                                                     \
   CPP(AtomicsConditionConstructor)                                             \
   CPP(AtomicsConditionIsCondition)                                             \

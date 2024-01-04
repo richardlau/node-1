@@ -183,20 +183,14 @@ void RelocIteratorBase<RelocInfoT>::next() {
 }
 
 RelocIterator::RelocIterator(Tagged<Code> code, int mode_mask)
-    : RelocIteratorBase<RelocInfo>(
-          code->instruction_start(), code->constant_pool(),
-          code->instruction_stream()->relocation_info()->GetDataEndAddress(),
-          code->instruction_stream()->relocation_info()->GetDataStartAddress(),
-          mode_mask) {}
+    : RelocIterator(code->instruction_stream(), mode_mask) {}
 
-RelocIterator::RelocIterator(Tagged<Code> code,
-                             Tagged<InstructionStream> instruction_stream,
-                             Tagged<ByteArray> relocation_info, int mode_mask)
-    : RelocIteratorBase<RelocInfo>(instruction_stream->instruction_start(),
-                                   code->constant_pool(instruction_stream),
-                                   relocation_info->GetDataEndAddress(),
-                                   relocation_info->GetDataStartAddress(),
-                                   mode_mask) {}
+RelocIterator::RelocIterator(Tagged<InstructionStream> istream, int mode_mask)
+    : RelocIteratorBase<RelocInfo>(
+          istream->instruction_start(), istream->constant_pool(),
+          // Use unchecked accessors since this can be called during GC
+          istream->unchecked_relocation_info()->end(),
+          istream->unchecked_relocation_info()->begin(), mode_mask) {}
 
 RelocIterator::RelocIterator(const CodeReference code_reference)
     : RelocIteratorBase<RelocInfo>(
@@ -224,9 +218,9 @@ WritableRelocIterator::WritableRelocIterator(
     Address constant_pool, int mode_mask)
     : RelocIteratorBase<WritableRelocInfo>(
           istream->instruction_start(), constant_pool,
-          istream->unchecked_relocation_info()->GetDataEndAddress(),
-          istream->unchecked_relocation_info()->GetDataStartAddress(),
-          mode_mask) {}
+          // Use unchecked accessors since this can be called during GC
+          istream->unchecked_relocation_info()->end(),
+          istream->unchecked_relocation_info()->begin(), mode_mask) {}
 
 WritableRelocIterator::WritableRelocIterator(
     WritableJitAllocation& jit_allocation, base::Vector<uint8_t> instructions,

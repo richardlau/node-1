@@ -94,8 +94,8 @@ enum class PrivateMemberFilter {
  */
 V8_EXPORT_PRIVATE bool GetPrivateMembers(Local<Context> context,
                                          Local<Object> value, int filter,
-                                         std::vector<Local<Value>>* names_out,
-                                         std::vector<Local<Value>>* values_out);
+                                         LocalVector<Value>* names_out,
+                                         LocalVector<Value>* values_out);
 
 /**
  * Forwards to v8::Object::CreationContext, but with special handling for
@@ -546,7 +546,7 @@ int64_t GetNextRandomInt64(v8::Isolate* isolate);
 
 MaybeLocal<Value> CallFunctionOn(Local<Context> context,
                                  Local<Function> function, Local<Value> recv,
-                                 int argc, Local<Value> argv[],
+                                 int argc, Global<Value> argv[],
                                  bool throw_on_side_effect);
 
 enum class EvaluateGlobalMode {

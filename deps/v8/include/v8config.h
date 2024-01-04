@@ -297,6 +297,8 @@ path. Add it with -I<path> to the command line
 //  V8_HAS_ATTRIBUTE_NONNULL            - __attribute__((nonnull)) supported
 //  V8_HAS_ATTRIBUTE_NOINLINE           - __attribute__((noinline)) supported
 //  V8_HAS_ATTRIBUTE_UNUSED             - __attribute__((unused)) supported
+//  V8_HAS_ATTRIBUTE_USED               - __attribute__((used)) supported
+//  V8_HAS_ATTRIBUTE_RETAIN             - __attribute__((retain)) supported
 //  V8_HAS_ATTRIBUTE_VISIBILITY         - __attribute__((visibility)) supported
 //  V8_HAS_ATTRIBUTE_WARN_UNUSED_RESULT - __attribute__((warn_unused_result))
 //                                        supported
@@ -349,6 +351,8 @@ path. Add it with -I<path> to the command line
 # define V8_HAS_ATTRIBUTE_NONNULL (__has_attribute(nonnull))
 # define V8_HAS_ATTRIBUTE_NOINLINE (__has_attribute(noinline))
 # define V8_HAS_ATTRIBUTE_UNUSED (__has_attribute(unused))
+# define V8_HAS_ATTRIBUTE_USED (__has_attribute(used))
+# define V8_HAS_ATTRIBUTE_RETAIN (__has_attribute(retain))
 // Support for the "preserve_most" attribute is limited:
 // - 32-bit platforms do not implement it,
 // - component builds fail because _dl_runtime_resolve clobbers registers,
@@ -678,10 +682,12 @@ path. Add it with -I<path> to the command line
 #if defined(__clang__) && defined(__has_attribute)
 #if __has_attribute(trivial_abi)
 #define V8_TRIVIAL_ABI [[clang::trivial_abi]]
+#define V8_HAS_ATTRIBUTE_TRIVIAL_ABI 1
 #endif // __has_attribute(trivial_abi)
 #endif // defined(__clang__) && defined(__has_attribute)
 #if !defined(V8_TRIVIAL_ABI)
 #define V8_TRIVIAL_ABI
+#define V8_HAS_ATTRIBUTE_TRIVIAL_ABI 0
 #endif //!defined(V8_TRIVIAL_ABI)
 
 // Helper macro to define no_sanitize attributes only with clang.
@@ -692,6 +698,11 @@ path. Add it with -I<path> to the command line
 #endif
 #if !defined(V8_CLANG_NO_SANITIZE)
 #define V8_CLANG_NO_SANITIZE(what)
+#endif
+
+// Exposing private symbols requires exposing public symbols too.
+#ifdef BUILDING_V8_SHARED_PRIVATE
+#define BUILDING_V8_SHARED
 #endif
 
 #if defined(BUILDING_V8_SHARED) && defined(USING_V8_SHARED)

@@ -226,7 +226,8 @@ size_t ScavengerCollector::JobTask::GetMaxConcurrency(
   size_t wanted_num_workers = std::max<size_t>(
       remaining_memory_chunks_.load(std::memory_order_relaxed),
       worker_count + copied_list_->Size() + promotion_list_->Size());
-  if (!outer_->heap_->ShouldUseBackgroundThreads()) {
+  if (!outer_->heap_->ShouldUseBackgroundThreads() ||
+      outer_->heap_->ShouldOptimizeForBattery()) {
     return std::min<size_t>(wanted_num_workers, 1);
   }
   return std::min<size_t>(scavengers_->size(), wanted_num_workers);
@@ -326,6 +327,8 @@ class V8_NODISCARD ScopedFullHeapCrashKey {
 void ScavengerCollector::CollectGarbage() {
   ScopedFullHeapCrashKey collect_full_heap_dump_if_crash(isolate_);
 
+  DCHECK(!heap_->allocator()->new_space_allocator()->IsLabValid());
+
   DCHECK(surviving_new_large_objects_.empty());
   std::vector<std::unique_ptr<Scavenger>> scavengers;
   Scavenger::EmptyChunksList empty_chunks;
@@ -359,8 +362,7 @@ void ScavengerCollector::CollectGarbage() {
       TRACE_GC(
           heap_->tracer(),
           GCTracer::Scope::SCAVENGER_SCAVENGE_WEAK_GLOBAL_HANDLES_IDENTIFY);
-      isolate_->traced_handles()->ComputeWeaknessForYoungObjects(
-          &JSObject::IsUnmodifiedApiObject);
+      isolate_->traced_handles()->ComputeWeaknessForYoungObjects();
     }
     {
       // Copy roots.
@@ -462,8 +464,10 @@ void ScavengerCollector::CollectGarbage() {
 
   ProcessWeakReferences(&ephemeron_table_list);
 
-  // Set age mark.
-  semi_space_new_space->set_age_mark(heap_->NewSpaceTop());
+  // Need to free new space LAB that was allocated during scavenge.
+  heap_->allocator()->new_space_allocator()->FreeLinearAllocationArea();
+  // Now that the LAB was freed, set age mark.
+  semi_space_new_space->set_age_mark_to_top();
 
   // Since we promote all surviving large objects immediately, all remaining
   // large objects must be dead.
@@ -610,10 +614,10 @@ Scavenger::PromotionList::Local::Local(Scavenger::PromotionList* promotion_list)
           promotion_list->large_object_promotion_list_) {}
 
 namespace {
-ConcurrentAllocator* CreateSharedOldAllocator(Heap* heap) {
+MainAllocator* CreateSharedOldAllocator(Heap* heap) {
   if (v8_flags.shared_string_table && heap->isolate()->has_shared_space()) {
-    return new ConcurrentAllocator(nullptr, heap->shared_allocation_space(),
-                                   ConcurrentAllocator::Context::kGC);
+    return new MainAllocator(heap, heap->shared_allocation_space(),
+                             MainAllocator::kInGC);
   }
   return nullptr;
 }

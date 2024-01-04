@@ -27,10 +27,12 @@ enum InstanceType : uint16_t;
 class JSGlobalObject;
 class JSGlobalProxy;
 class LookupIterator;
+class PropertyDescriptor;
 class PropertyKey;
 class NativeContext;
 class IsCompiledScope;
 class SwissNameDictionary;
+class ElementsAccessor;
 
 #include "torque-generated/src/objects/js-objects-tq.inc"
 
@@ -97,8 +99,13 @@ class JSReceiver : public TorqueGeneratedJSReceiver<JSReceiver, HeapObject> {
       Isolate* isolate, Handle<JSReceiver> receiver,
       OrdinaryToPrimitiveHint hint);
 
+  // Unwraps the chain of potential function wrappers or JSProxy objects and
+  // return the leaf function's creation context.
+  // Throws TypeError in case there's a revoked JSProxy on the way.
+  // https://tc39.es/ecma262/#sec-getfunctionrealm
   static MaybeHandle<NativeContext> GetFunctionRealm(
       Handle<JSReceiver> receiver);
+
   V8_EXPORT_PRIVATE static MaybeHandle<NativeContext> GetContextForMicrotask(
       Handle<JSReceiver> receiver);
 
@@ -248,9 +255,10 @@ class JSReceiver : public TorqueGeneratedJSReceiver<JSReceiver, HeapObject> {
   static Handle<String> GetConstructorName(Isolate* isolate,
                                            Handle<JSReceiver> receiver);
 
-  V8_EXPORT_PRIVATE base::Optional<Tagged<NativeContext>>
-  GetCreationContextRaw();
-  V8_EXPORT_PRIVATE MaybeHandle<NativeContext> GetCreationContext();
+  V8_EXPORT_PRIVATE inline base::Optional<Tagged<NativeContext>>
+  GetCreationContext();
+  V8_EXPORT_PRIVATE inline MaybeHandle<NativeContext> GetCreationContext(
+      Isolate* isolate);
 
   V8_WARN_UNUSED_RESULT static inline Maybe<PropertyAttributes>
   GetPropertyAttributes(Handle<JSReceiver> object, Handle<Name> name);
@@ -636,6 +644,7 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
 
   // Returns true if this object is an Api object which can, if unmodified, be
   // dropped during minor GC because the embedder can recreate it again later.
+  static inline bool IsDroppableApiObject(Tagged<Map>);
   inline bool IsDroppableApiObject() const;
 
   // Returns a new map with all transitions dropped from the object's current
@@ -896,9 +905,6 @@ class JSObject : public TorqueGeneratedJSObject<JSObject, JSReceiver> {
 
   // Gets the number of currently used elements.
   int GetFastElementsUsage();
-
-  static bool AllCanRead(LookupIterator* it);
-  static bool AllCanWrite(LookupIterator* it);
 
   template <typename Dictionary>
   static void ApplyAttributesToDictionary(Isolate* isolate, ReadOnlyRoots roots,

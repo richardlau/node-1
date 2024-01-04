@@ -32,8 +32,8 @@ int SearchLiteralsMapEntry(Tagged<CompilationCacheTable> cache,
     Tagged<WeakFixedArray> literals_map = WeakFixedArray::cast(obj);
     int length = literals_map->length();
     for (int i = 0; i < length; i += kLiteralEntryLength) {
-      DCHECK(literals_map->Get(i + kLiteralContextOffset)->IsWeakOrCleared());
-      if (literals_map->Get(i + kLiteralContextOffset) ==
+      DCHECK(literals_map->get(i + kLiteralContextOffset)->IsWeakOrCleared());
+      if (literals_map->get(i + kLiteralContextOffset) ==
           HeapObjectReference::Weak(native_context)) {
         return i;
       }
@@ -66,7 +66,7 @@ void AddToFeedbackCellsMap(Handle<CompilationCacheTable> cache,
     entry = SearchLiteralsMapEntry(*cache, cache_entry, *native_context);
     if (entry >= 0) {
       // Just set the code of the entry.
-      old_literals_map->Set(entry + kLiteralLiteralsOffset,
+      old_literals_map->set(entry + kLiteralLiteralsOffset,
                             HeapObjectReference::Weak(*feedback_cell));
       return;
     }
@@ -75,7 +75,7 @@ void AddToFeedbackCellsMap(Handle<CompilationCacheTable> cache,
     DCHECK_LT(entry, 0);
     int length = old_literals_map->length();
     for (int i = 0; i < length; i += kLiteralEntryLength) {
-      if (old_literals_map->Get(i + kLiteralContextOffset)->IsCleared()) {
+      if (old_literals_map->get(i + kLiteralContextOffset)->IsCleared()) {
         new_literals_map = old_literals_map;
         entry = i;
         break;
@@ -90,17 +90,17 @@ void AddToFeedbackCellsMap(Handle<CompilationCacheTable> cache,
     }
   }
 
-  new_literals_map->Set(entry + kLiteralContextOffset,
+  new_literals_map->set(entry + kLiteralContextOffset,
                         HeapObjectReference::Weak(*native_context));
-  new_literals_map->Set(entry + kLiteralLiteralsOffset,
+  new_literals_map->set(entry + kLiteralLiteralsOffset,
                         HeapObjectReference::Weak(*feedback_cell));
 
 #ifdef DEBUG
   for (int i = 0; i < new_literals_map->length(); i += kLiteralEntryLength) {
-    MaybeObject object = new_literals_map->Get(i + kLiteralContextOffset);
+    MaybeObject object = new_literals_map->get(i + kLiteralContextOffset);
     DCHECK(object->IsCleared() ||
            IsNativeContext(object.GetHeapObjectAssumeWeak()));
-    object = new_literals_map->Get(i + kLiteralLiteralsOffset);
+    object = new_literals_map->get(i + kLiteralLiteralsOffset);
     DCHECK(object->IsCleared() ||
            IsFeedbackCell(object.GetHeapObjectAssumeWeak()));
   }
@@ -121,7 +121,7 @@ Tagged<FeedbackCell> SearchLiteralsMap(Tagged<CompilationCacheTable> cache,
     Tagged<WeakFixedArray> literals_map =
         WeakFixedArray::cast(cache->EvalFeedbackValueAt(cache_entry));
     DCHECK_LE(entry + kLiteralEntryLength, literals_map->length());
-    MaybeObject object = literals_map->Get(entry + kLiteralLiteralsOffset);
+    MaybeObject object = literals_map->get(entry + kLiteralLiteralsOffset);
 
     if (!object->IsCleared()) {
       result = FeedbackCell::cast(object.GetHeapObjectAssumeWeak());
@@ -270,6 +270,13 @@ bool ScriptCacheKey::MatchesOrigin(Tagged<Script> script) {
     return false;
   }
 
+  // Don't compare host options if the script was deserialized because we didn't
+  // serialize host options (see CodeSerializer::SerializeObjectImpl())
+  if (script->deserialized() &&
+      script->host_defined_options() ==
+          ReadOnlyRoots(isolate_).empty_fixed_array()) {
+    return true;
+  }
   // TODO(cbruni, chromium:1244145): Remove once migrated to the context
   Handle<Object> maybe_host_defined_options;
   if (!host_defined_options_.ToHandle(&maybe_host_defined_options)) {
@@ -330,11 +337,11 @@ bool ScriptCacheKey::IsMatch(Tagged<Object> other) {
   // A hash check can quickly reject many non-matches, even though this step
   // isn't strictly necessary.
   uint32_t other_hash =
-      static_cast<uint32_t>(other_array->Get(kHash).ToSmi().value());
+      static_cast<uint32_t>(other_array->get(kHash).ToSmi().value());
   if (other_hash != Hash()) return false;
 
   Tagged<HeapObject> other_script_object;
-  if (!other_array->Get(kWeakScript)
+  if (!other_array->get(kWeakScript)
            .GetHeapObjectIfWeak(&other_script_object)) {
     return false;
   }
@@ -349,9 +356,9 @@ Handle<Object> ScriptCacheKey::AsHandle(Isolate* isolate,
   // Any SharedFunctionInfo being stored in the script cache should have a
   // Script.
   DCHECK(IsScript(shared->script()));
-  array->Set(kHash,
+  array->set(kHash,
              MaybeObject::FromObject(Smi::FromInt(static_cast<int>(Hash()))));
-  array->Set(kWeakScript,
+  array->set(kWeakScript,
              MaybeObject::MakeWeak(MaybeObject::FromObject(shared->script())));
   return array;
 }
@@ -396,7 +403,7 @@ CompilationCacheScriptLookupResult CompilationCacheTable::LookupScript(
   DisallowGarbageCollection no_gc;
   Tagged<Object> key_in_table = table->KeyAt(entry);
   Tagged<Script> script = Script::cast(WeakFixedArray::cast(key_in_table)
-                                           ->Get(ScriptCacheKey::kWeakScript)
+                                           ->get(ScriptCacheKey::kWeakScript)
                                            .GetHeapObjectAssumeWeak());
 
   Tagged<Object> obj = table->PrimaryValueAt(entry);
@@ -454,7 +461,7 @@ Handle<CompilationCacheTable> CompilationCacheTable::EnsureScriptTableCapacity(
       Tagged<Object> key;
       if (!cache->ToKey(isolate, entry, &key)) continue;
       if (WeakFixedArray::cast(key)
-              ->Get(ScriptCacheKey::kWeakScript)
+              ->get(ScriptCacheKey::kWeakScript)
               .IsCleared()) {
         DCHECK(IsUndefined(cache->PrimaryValueAt(entry)));
         cache->RemoveEntry(entry);
@@ -524,7 +531,13 @@ Handle<CompilationCacheTable> CompilationCacheTable::PutEval(
     InternalIndex entry = cache->FindEntry(isolate, &key);
     if (entry.is_found()) {
       cache->SetKeyAt(entry, *k);
-      cache->SetPrimaryValueAt(entry, *value);
+      if (cache->PrimaryValueAt(entry) != *value) {
+        cache->SetPrimaryValueAt(entry, *value);
+        // The SFI is changing because the code was aged. Nuke existing feedback
+        // since it can't be reused after this point.
+        cache->SetEvalFeedbackValueAt(entry,
+                                      ReadOnlyRoots(isolate).the_hole_value());
+      }
       // AddToFeedbackCellsMap may allocate a new sub-array to live in the
       // entry, but it won't change the cache array. Therefore EntryToIndex
       // and entry remains correct.
@@ -572,7 +585,7 @@ void CompilationCacheTable::RemoveEntry(InternalIndex entry) {
   int entry_index = EntryToIndex(entry);
   Tagged<Object> the_hole_value = GetReadOnlyRoots().the_hole_value();
   for (int i = 0; i < kEntrySize; i++) {
-    NoWriteBarrierSet(*this, entry_index + i, the_hole_value);
+    this->set(entry_index + i, the_hole_value, SKIP_WRITE_BARRIER);
   }
   ElementRemoved();
 

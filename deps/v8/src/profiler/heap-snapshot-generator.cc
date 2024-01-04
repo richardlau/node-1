@@ -1156,12 +1156,17 @@ class IndexedReferencesExtractor : public ObjectVisitorWithCageBases {
 
   void VisitIndirectPointer(Tagged<HeapObject> host, IndirectPointerSlot slot,
                             IndirectPointerMode mode) override {
-    // The JSFunction::Code field is handled separately in
-    // ExtractJSObjectReferences but here we have to mark it as visited.
-    if (IsJSFunction(host)) {
-      int field_index = JSFunction::kCodeOffset / kTaggedSize;
-      DCHECK(generator_->visited_fields_[field_index]);
+    int field_index =
+        static_cast<int>(slot.address() - parent_start_.address()) /
+        kIndirectPointerSize;
+    DCHECK_GE(field_index, 0);
+    if (generator_->visited_fields_[field_index]) {
       generator_->visited_fields_[field_index] = false;
+    } else {
+      Tagged<Object> content = slot.load(generator_->isolate());
+      if (IsHeapObject(content)) {
+        VisitHeapObjectImpl(HeapObject::cast(content), field_index);
+      }
     }
   }
 
@@ -1364,7 +1369,7 @@ void V8HeapExplorer::ExtractJSObjectReferences(HeapEntry* entry,
     TagObject(js_fun->context(), "(context)");
     SetInternalReference(entry, "context", js_fun->context(),
                          JSFunction::kContextOffset);
-    SetInternalReference(entry, "code", js_fun->code(),
+    SetInternalReference(entry, "code", js_fun->code(isolate),
                          JSFunction::kCodeOffset);
   } else if (IsJSGlobalObject(obj)) {
     Tagged<JSGlobalObject> global_obj = JSGlobalObject::cast(obj);
@@ -1553,8 +1558,8 @@ void V8HeapExplorer::ExtractMapReferences(HeapEntry* entry, Tagged<Map> map) {
                        Map::kInstanceDescriptorsOffset);
   SetInternalReference(entry, "prototype", map->prototype(),
                        Map::kPrototypeOffset);
-  if (IsContextMap(map)) {
-    Tagged<Object> native_context = map->native_context();
+  if (IsContextMap(map) || IsMapMap(map)) {
+    Tagged<Object> native_context = map->native_context_or_null();
     TagObject(native_context, "(native context)");
     SetInternalReference(entry, "native_context", native_context,
                          Map::kConstructorOrBackPointerOrNativeContextOffset);
@@ -1681,10 +1686,27 @@ void V8HeapExplorer::ExtractCodeReferences(HeapEntry* entry,
                        Code::kInstructionStreamOffset);
 
   if (code->kind() == CodeKind::BASELINE) {
-    TagObject(code->bytecode_or_interpreter_data(), "(interpreter data)");
-    SetInternalReference(entry, "interpreter_data",
-                         code->bytecode_or_interpreter_data(),
-                         Code::kDeoptimizationDataOrInterpreterDataOffset);
+    // TODO(saelo): Currently, the BytecodeArray (living in trusted space) is
+    // referenced from this field through its wrapper object, so we need to
+    // handle this here. Once Code objects move into trusted space as well,
+    // they will again directly reference the BytecodeArray, at which point
+    // this special handling can be removed again.
+    static_assert(!kCodeObjectLiveInTrustedSpace);
+    Tagged<Object> bytecode_or_interpreter_data =
+        code->bytecode_or_interpreter_data(isolate());
+    if (IsBytecodeArray(bytecode_or_interpreter_data)) {
+      TagObject(BytecodeArray::cast(bytecode_or_interpreter_data)->wrapper(),
+                "(interpreter data)");
+      SetInternalReference(
+          entry, "interpreter_data",
+          BytecodeArray::cast(bytecode_or_interpreter_data)->wrapper(),
+          Code::kDeoptimizationDataOrInterpreterDataOffset);
+    } else {
+      TagObject(bytecode_or_interpreter_data, "(interpreter data)");
+      SetInternalReference(entry, "interpreter_data",
+                           bytecode_or_interpreter_data,
+                           Code::kDeoptimizationDataOrInterpreterDataOffset);
+    }
     TagObject(code->bytecode_offset_table(), "(bytecode offset table)",
               HeapEntry::kCode);
     SetInternalReference(entry, "bytecode_offset_table",
@@ -1940,7 +1962,7 @@ void V8HeapExplorer::ExtractWeakArrayReferences(int header_size,
                                                 HeapEntry* entry,
                                                 Tagged<T> array) {
   for (int i = 0; i < array->length(); ++i) {
-    MaybeObject object = array->Get(i);
+    MaybeObject object = array->get(i);
     Tagged<HeapObject> heap_object;
     if (object.GetHeapObjectIfWeak(&heap_object)) {
       SetWeakReference(entry, i, heap_object, header_size + i * kTaggedSize);
@@ -2205,12 +2227,16 @@ class RootsReferencesExtractor : public RootVisitor {
   void SetVisitingWeakRoots() { visiting_weak_roots_ = true; }
 
   void VisitRootPointer(Root root, const char* description,
-                        FullObjectSlot object) override {
+                        FullObjectSlot p) override {
+    Tagged<Object> object = *p;
+#ifdef V8_ENABLE_DIRECT_LOCAL
+    if (object.ptr() == kTaggedNullAddress) return;
+#endif
     if (root == Root::kBuiltins) {
-      explorer_->TagBuiltinCodeObject(Code::cast(*object), description);
+      explorer_->TagBuiltinCodeObject(Code::cast(object), description);
     }
     explorer_->SetGcSubrootReference(root, description, visiting_weak_roots_,
-                                     *object);
+                                     object);
   }
 
   void VisitRootPointers(Root root, const char* description,
@@ -2331,9 +2357,10 @@ bool V8HeapExplorer::IterateAndExtractReferences(
 
 bool V8HeapExplorer::IsEssentialObject(Tagged<Object> object) {
   if (!IsHeapObject(object)) return false;
-  // Avoid comparing InstructionStream objects with non-InstructionStream
-  // objects below.
-  if (IsCodeSpaceObject(HeapObject::cast(object))) {
+  // Avoid comparing objects in other pointer compression cages to objects
+  // inside the main cage as the comparison may only look at the lower 32 bits.
+  if (IsCodeSpaceObject(HeapObject::cast(object)) ||
+      IsTrustedSpaceObject(HeapObject::cast(object))) {
     return true;
   }
   Isolate* isolate = heap_->isolate();

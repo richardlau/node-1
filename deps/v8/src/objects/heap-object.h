@@ -10,6 +10,7 @@
 #include "src/objects/instance-type.h"
 #include "src/objects/tagged-field.h"
 #include "src/sandbox/indirect-pointer-tag.h"
+#include "src/sandbox/isolate.h"
 
 // Has to be the last include (doesn't have include guards):
 #include "src/objects/object-macros.h"
@@ -21,13 +22,50 @@ class Heap;
 class PrimitiveHeapObject;
 class ExternalPointerSlot;
 class IndirectPointerSlot;
+class ExposedTrustedObject;
+class ObjectVisitor;
 
 V8_OBJECT class HeapObjectLayout {
+ public:
+  // [map]: Contains a map which contains the object's reflective
+  // information.
+  inline Tagged<Map> map() const;
+
+  // Initialize the map immediately after the object is allocated.
+  // Do not use this outside Heap.
+  inline void set_map_after_allocation(
+      Tagged<Map> value, WriteBarrierMode mode = UPDATE_WRITE_BARRIER);
+
+  // Given a heap object's map pointer, returns the heap size in bytes
+  // Useful when the map pointer field is used for other purposes.
+  // GC internal.
+  V8_EXPORT_PRIVATE int SizeFromMap(Tagged<Map> map) const;
+
  private:
   friend class HeapObject;
 
   TaggedMember<Map> map_;
 } V8_OBJECT_END;
+
+static_assert(sizeof(HeapObjectLayout) == kTaggedSize);
+
+inline bool operator==(const HeapObjectLayout* obj, TaggedBase ptr) {
+  return Tagged<HeapObject>(obj) == ptr;
+}
+inline bool operator==(TaggedBase ptr, const HeapObjectLayout* obj) {
+  return ptr == Tagged<HeapObject>(obj);
+}
+inline bool operator!=(const HeapObjectLayout* obj, TaggedBase ptr) {
+  return Tagged<HeapObject>(obj) != ptr;
+}
+inline bool operator!=(TaggedBase ptr, const HeapObjectLayout* obj) {
+  return ptr != Tagged<HeapObject>(obj);
+}
+
+template <typename T>
+struct ObjectTraits {
+  using BodyDescriptor = typename T::BodyDescriptor;
+};
 
 // HeapObject is the superclass for all classes describing heap allocated
 // objects.
@@ -212,38 +250,72 @@ class HeapObject : public TaggedImpl<HeapObjectReferenceType::STRONG, Address> {
   // ExternalPointer_t field accessors.
   //
   template <ExternalPointerTag tag>
-  inline void InitExternalPointerField(size_t offset, Isolate* isolate,
+  inline void InitExternalPointerField(size_t offset, IsolateForSandbox isolate,
                                        Address value);
   template <ExternalPointerTag tag>
   inline Address ReadExternalPointerField(size_t offset,
-                                          Isolate* isolate) const;
+                                          IsolateForSandbox isolate) const;
   template <ExternalPointerTag tag>
-  inline void WriteExternalPointerField(size_t offset, Isolate* isolate,
+  inline void WriteExternalPointerField(size_t offset,
+                                        IsolateForSandbox isolate,
                                         Address value);
 
   template <ExternalPointerTag tag>
-  inline void WriteLazilyInitializedExternalPointerField(size_t offset,
-                                                         Isolate* isolate,
-                                                         Address value);
+  inline void WriteLazilyInitializedExternalPointerField(
+      size_t offset, IsolateForSandbox isolate, Address value);
 
   inline void ResetLazilyInitializedExternalPointerField(size_t offset);
 
   //
-  // IndirectPointer field accessors.
+  // Indirect pointers.
   //
+  // These are only available when the sandbox is enabled.
+  inline void InitSelfIndirectPointerField(size_t offset,
+                                           IsolateForSandbox isolate);
+
   template <IndirectPointerTag tag>
   inline Tagged<Object> ReadIndirectPointerField(
-      size_t offset, Isolate* isolate, InstanceType expected_type) const;
+      size_t offset, IsolateForSandbox isolate) const;
 
+  template <IndirectPointerTag tag>
+  inline void WriteIndirectPointerField(size_t offset,
+                                        Tagged<ExposedTrustedObject> value);
+
+  // Trusted pointers.
   //
-  // CodePointer field accessors.
+  // A pointer to a trusted object. When the sandbox is enabled, these are
+  // indirect pointers using the the TrustedPointerTable (TPT). When the sandbox
+  // is disabled, they are regular tagged pointers. They must always point to an
+  // ExposedTrustedObject as (only) these objects can be referenced through the
+  // trusted pointer table.
+  template <IndirectPointerTag tag>
+  inline Tagged<ExposedTrustedObject> ReadTrustedPointerField(
+      size_t offset, IsolateForSandbox isolate) const;
+  template <IndirectPointerTag tag>
+  inline void WriteTrustedPointerField(size_t offset,
+                                       Tagged<ExposedTrustedObject> value);
+
+  // Trusted pointer fields can be cleared, in which case they no longer point
+  // to any object. When the sandbox is enabled, this will set the fields
+  // indirect pointer handle to the null handle (referencing the zeroth entry in
+  // the TrustedPointerTable which just contains nullptr). When the sandbox is
+  // disabled, this will set the field to Smi::zero().
+  inline bool IsTrustedPointerFieldCleared(size_t offset) const;
+  inline void ClearTrustedPointerField(size_t offest);
+
+  // Code pointers.
   //
-  inline void InitCodePointerTableEntryField(size_t offset, Isolate* isolate,
-                                             Tagged<Code> owning_code,
-                                             Address entrypoint);
-  inline Address ReadCodeEntrypointViaIndirectPointerField(size_t offset) const;
-  inline void WriteCodeEntrypointViaIndirectPointerField(size_t offset,
-                                                         Address value);
+  // These are special versions of trusted pointers that always point to Code
+  // objects. When the sandbox is enabled, they are indirect pointers using the
+  // code pointer table (CPT) instead of the TrustedPointerTable. When the
+  // sandbox is disabled, they are regular tagged pointers.
+  inline Tagged<Code> ReadCodePointerField(size_t offset,
+                                           IsolateForSandbox isolate) const;
+  inline void WriteCodePointerField(size_t offset, Tagged<Code> value);
+
+  inline Address ReadCodeEntrypointViaCodePointerField(size_t offset) const;
+  inline void WriteCodeEntrypointViaCodePointerField(size_t offset,
+                                                     Address value);
 
   // Returns the field at offset in obj, as a read/write Object reference.
   // Does no checking, and is safe to use during GC, while maps are invalid.
@@ -269,6 +341,9 @@ class HeapObject : public TaggedImpl<HeapObjectReferenceType::STRONG, Address> {
 
   // Dispatched behavior.
   void HeapObjectShortPrint(std::ostream& os);
+  void Print();
+  static void Print(Tagged<Object> obj);
+  static void Print(Tagged<Object> obj, std::ostream& os);
 #ifdef OBJECT_PRINT
   void PrintHeader(std::ostream& os, const char* id);
 #endif
@@ -319,8 +394,8 @@ class HeapObject : public TaggedImpl<HeapObjectReferenceType::STRONG, Address> {
  protected:
   struct SkipTypeCheckTag {};
   friend class Tagged<HeapObject>;
-  explicit constexpr inline HeapObject(Address ptr,
-                                       HeapObject::SkipTypeCheckTag)
+  explicit V8_INLINE constexpr HeapObject(Address ptr,
+                                          HeapObject::SkipTypeCheckTag)
       : TaggedImpl(ptr) {}
   explicit inline HeapObject(Address ptr);
 
@@ -384,7 +459,10 @@ constexpr HeapObject Tagged<HeapObject>::ToRawPtr() const {
   V8_INLINE bool Is##Type(Tagged<HeapObject> obj);                             \
   V8_INLINE bool Is##Type(Tagged<HeapObject> obj, PtrComprCageBase cage_base); \
   V8_INLINE bool Is##Type(HeapObject obj);                                     \
-  V8_INLINE bool Is##Type(HeapObject obj, PtrComprCageBase cage_base);
+  V8_INLINE bool Is##Type(HeapObject obj, PtrComprCageBase cage_base);         \
+  V8_INLINE bool Is##Type(const HeapObjectLayout* obj);                        \
+  V8_INLINE bool Is##Type(const HeapObjectLayout* obj,                         \
+                          PtrComprCageBase cage_base);
 HEAP_OBJECT_TYPE_LIST(IS_TYPE_FUNCTION_DECL)
 IS_TYPE_FUNCTION_DECL(HashTableBase)
 IS_TYPE_FUNCTION_DECL(SmallOrderedHashTable)
@@ -392,9 +470,11 @@ IS_TYPE_FUNCTION_DECL(SmallOrderedHashTable)
 
 // Most calls to Is<Oddball> should go via the Tagged<Object> overloads, withst
 // an Isolate/LocalIsolate/ReadOnlyRoots parameter.
-#define IS_TYPE_FUNCTION_DECL(Type, Value, _)      \
-  V8_INLINE bool Is##Type(Tagged<HeapObject> obj); \
-  V8_INLINE bool Is##Type(HeapObject obj);
+#define IS_TYPE_FUNCTION_DECL(Type, Value, _)                             \
+  V8_INLINE bool Is##Type(Tagged<HeapObject> obj);                        \
+  V8_INLINE bool Is##Type(HeapObject obj);                                \
+  V8_INLINE bool Is##Type(const HeapObjectLayout* obj, Isolate* isolate); \
+  V8_INLINE bool Is##Type(const HeapObjectLayout* obj);
 ODDBALL_LIST(IS_TYPE_FUNCTION_DECL)
 HOLE_LIST(IS_TYPE_FUNCTION_DECL)
 IS_TYPE_FUNCTION_DECL(NullOrUndefined, , /* unused */)
@@ -404,7 +484,10 @@ IS_TYPE_FUNCTION_DECL(NullOrUndefined, , /* unused */)
   V8_INLINE bool Is##Name(Tagged<HeapObject> obj);                             \
   V8_INLINE bool Is##Name(Tagged<HeapObject> obj, PtrComprCageBase cage_base); \
   V8_INLINE bool Is##Name(HeapObject obj);                                     \
-  V8_INLINE bool Is##Name(HeapObject obj, PtrComprCageBase cage_base);
+  V8_INLINE bool Is##Name(HeapObject obj, PtrComprCageBase cage_base);         \
+  V8_INLINE bool Is##Name(const HeapObjectLayout* obj);                        \
+  V8_INLINE bool Is##Name(const HeapObjectLayout* obj,                         \
+                          PtrComprCageBase cage_base);
 STRUCT_LIST(DECL_STRUCT_PREDICATE)
 #undef DECL_STRUCT_PREDICATE
 

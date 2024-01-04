@@ -43,7 +43,7 @@ thread_local Tagged<HeapObject> pending_layout_change_object =
 class VerifySmisVisitor final : public RootVisitor {
  public:
   void VisitRootPointers(Root root, const char* description,
-                         FullObjectSlot start, FullObjectSlot end) override {
+                         FullObjectSlot start, FullObjectSlot end) final {
     for (FullObjectSlot current = start; current < end; ++current) {
       CHECK(IsSmi(*current));
     }
@@ -137,6 +137,8 @@ void VerifyPointersVisitor::VerifyHeapObjectImpl(
     Tagged<HeapObject> heap_object) {
   CHECK(IsValidHeapObject(heap_, heap_object));
   CHECK(IsMap(heap_object->map(cage_base())));
+  CHECK_IMPLIES(Heap::InYoungGeneration(heap_object),
+                Heap::InToPage(heap_object));
 }
 
 void VerifyPointersVisitor::VerifyCodeObjectImpl(
@@ -151,6 +153,9 @@ template <typename TSlot>
 void VerifyPointersVisitor::VerifyPointersImpl(TSlot start, TSlot end) {
   for (TSlot slot = start; slot < end; ++slot) {
     typename TSlot::TObject object = slot.load(cage_base());
+#ifdef V8_ENABLE_DIRECT_LOCAL
+    if (object.ptr() == kTaggedNullAddress) continue;
+#endif
     Tagged<HeapObject> heap_object;
     if (object.GetHeapObject(&heap_object)) {
       VerifyHeapObjectImpl(heap_object);
@@ -302,6 +307,7 @@ void HeapVerification::Verify() {
   HandleScope scope(isolate());
 
   heap()->MakeHeapIterable();
+  heap()->FreeLinearAllocationAreas();
 
   // TODO(v8:13257): Currently we don't iterate through the stack conservatively
   // when verifying the heap.
@@ -360,6 +366,7 @@ void HeapVerification::VerifySpace(BaseSpace* space) {
 void HeapVerification::VerifyPage(const BasicMemoryChunk* chunk) {
   CHECK(!current_chunk_.has_value());
   CHECK(!chunk->IsFlagSet(Page::PAGE_NEW_OLD_PROMOTION));
+  CHECK(!chunk->IsFlagSet(Page::FROM_PAGE));
   if (V8_SHARED_RO_HEAP_BOOL && chunk->InReadOnlySpace()) {
     CHECK_NULL(chunk->owner());
   } else {
@@ -622,7 +629,8 @@ class SlotCollectingVisitor final : public ObjectVisitor {
   }
 
   void VisitMapPointer(Tagged<HeapObject> object) override {
-  }  // do nothing by default
+    slots_.push_back(MaybeObjectSlot(object->map_slot()));
+  }
 
   int number_of_slots() { return static_cast<int>(slots_.size()); }
 

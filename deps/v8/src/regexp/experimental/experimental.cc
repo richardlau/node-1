@@ -52,7 +52,7 @@ Handle<ByteArray> VectorToByteArray(Isolate* isolate, base::Vector<T> data) {
   int byte_length = sizeof(T) * data.length();
   Handle<ByteArray> byte_array = isolate->factory()->NewByteArray(byte_length);
   DisallowGarbageCollection no_gc;
-  MemCopy(byte_array->GetDataStartAddress(), data.begin(), byte_length);
+  MemCopy(byte_array->begin(), data.begin(), byte_length);
   return byte_array;
 }
 
@@ -72,7 +72,7 @@ base::Optional<CompilationResult> CompileImpl(Isolate* isolate,
 
   // Parse and compile the regexp source.
   RegExpCompileData parse_result;
-  DCHECK(!isolate->has_pending_exception());
+  DCHECK(!isolate->has_exception());
 
   RegExpFlags flags = JSRegExp::AsRegExpFlags(regexp->flags());
   bool parse_success = RegExpParser::ParseRegExpFromHeapString(
@@ -113,7 +113,7 @@ bool ExperimentalRegExp::Compile(Isolate* isolate, Handle<JSRegExp> re) {
   base::Optional<CompilationResult> compilation_result =
       CompileImpl(isolate, re);
   if (!compilation_result.has_value()) {
-    DCHECK(isolate->has_pending_exception());
+    DCHECK(isolate->has_exception());
     return false;
   }
 
@@ -126,7 +126,7 @@ bool ExperimentalRegExp::Compile(Isolate* isolate, Handle<JSRegExp> re) {
 base::Vector<RegExpInstruction> AsInstructionSequence(
     Tagged<ByteArray> raw_bytes) {
   RegExpInstruction* inst_begin =
-      reinterpret_cast<RegExpInstruction*>(raw_bytes->GetDataStartAddress());
+      reinterpret_cast<RegExpInstruction*>(raw_bytes->begin());
   int inst_num = raw_bytes->length() / sizeof(RegExpInstruction);
   DCHECK_EQ(sizeof(RegExpInstruction) * inst_num, raw_bytes->length());
   return base::Vector<RegExpInstruction>(inst_begin, inst_num);
@@ -210,7 +210,7 @@ MaybeHandle<Object> ExperimentalRegExp::Exec(
 #endif
 
   if (!IsCompiled(regexp, isolate) && !Compile(isolate, regexp)) {
-    DCHECK(isolate->has_pending_exception());
+    DCHECK(isolate->has_exception());
     return MaybeHandle<Object>();
   }
 
@@ -252,7 +252,7 @@ MaybeHandle<Object> ExperimentalRegExp::Exec(
         // Re-run execution.
         continue;
       }
-      DCHECK(isolate->has_pending_exception());
+      DCHECK(isolate->has_exception());
       return MaybeHandle<Object>();
     }
   } while (true);
@@ -323,7 +323,7 @@ MaybeHandle<Object> ExperimentalRegExp::OneshotExec(
         // Re-run execution.
         continue;
       }
-      DCHECK(isolate->has_pending_exception());
+      DCHECK(isolate->has_exception());
       return MaybeHandle<Object>();
     }
   } while (true);

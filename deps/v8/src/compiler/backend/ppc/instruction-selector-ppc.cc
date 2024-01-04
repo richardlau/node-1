@@ -1681,13 +1681,21 @@ void InstructionSelectorT<Adapter>::VisitTryTruncateFloat64ToUint64(
 template <typename Adapter>
 void InstructionSelectorT<Adapter>::VisitTryTruncateFloat64ToInt32(
     node_t node) {
-  UNIMPLEMENTED();
+  if constexpr (Adapter::IsTurboshaft) {
+    UNIMPLEMENTED();
+  } else {
+    VisitTryTruncateDouble(this, kPPC_DoubleToInt32, node);
+  }
 }
 
 template <typename Adapter>
 void InstructionSelectorT<Adapter>::VisitTryTruncateFloat64ToUint32(
     node_t node) {
-  UNIMPLEMENTED();
+  if constexpr (Adapter::IsTurboshaft) {
+    UNIMPLEMENTED();
+  } else {
+    VisitTryTruncateDouble(this, kPPC_DoubleToUint32, node);
+  }
 }
 
 template <typename Adapter>
@@ -2865,17 +2873,27 @@ void InstructionSelectorT<Adapter>::VisitMemoryBarrier(node_t node) {
 }
 
 template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord32AtomicLoad(Node* node) {
-  AtomicLoadParameters atomic_load_params = AtomicLoadParametersOf(node->op());
-  LoadRepresentation load_rep = atomic_load_params.representation();
-  VisitLoadCommon(this, node, load_rep);
+void InstructionSelectorT<Adapter>::VisitWord32AtomicLoad(node_t node) {
+  if constexpr (Adapter::IsTurboshaft) {
+    UNIMPLEMENTED();
+  } else {
+    AtomicLoadParameters atomic_load_params =
+        AtomicLoadParametersOf(node->op());
+    LoadRepresentation load_rep = atomic_load_params.representation();
+    VisitLoadCommon(this, node, load_rep);
+  }
 }
 
 template <typename Adapter>
-void InstructionSelectorT<Adapter>::VisitWord64AtomicLoad(Node* node) {
-  AtomicLoadParameters atomic_load_params = AtomicLoadParametersOf(node->op());
-  LoadRepresentation load_rep = atomic_load_params.representation();
-  VisitLoadCommon(this, node, load_rep);
+void InstructionSelectorT<Adapter>::VisitWord64AtomicLoad(node_t node) {
+  if constexpr (Adapter::IsTurboshaft) {
+    UNIMPLEMENTED();
+  } else {
+    AtomicLoadParameters atomic_load_params =
+        AtomicLoadParametersOf(node->op());
+    LoadRepresentation load_rep = atomic_load_params.representation();
+    VisitLoadCommon(this, node, load_rep);
+  }
 }
 
 template <typename Adapter>
@@ -3372,7 +3390,7 @@ SIMD_VISIT_EXTRACT_LANE(I8x16, I, U, 8)
 SIMD_VISIT_EXTRACT_LANE(I8x16, I, S, 8)
 #undef SIMD_VISIT_EXTRACT_LANE
 
-#define SIMD_VISIT_REPLACE_LANE(Type)                                         \
+#define SIMD_VISIT_REPLACE_LANE(Type, T, LaneSize)                            \
   template <typename Adapter>                                                 \
   void InstructionSelectorT<Adapter>::Visit##Type##ReplaceLane(node_t node) { \
     if constexpr (Adapter::IsTurboshaft) {                                    \
@@ -3380,12 +3398,17 @@ SIMD_VISIT_EXTRACT_LANE(I8x16, I, S, 8)
     } else {                                                                  \
       PPCOperandGeneratorT<Adapter> g(this);                                  \
       int32_t lane = OpParameter<int32_t>(node->op());                        \
-      Emit(kPPC_##Type##ReplaceLane, g.DefineSameAsFirst(node),               \
-           g.UseRegister(node->InputAt(0)), g.UseImmediate(lane),             \
-           g.UseRegister(node->InputAt(1)));                                  \
+      Emit(kPPC_##T##ReplaceLane | LaneSizeField::encode(LaneSize),           \
+           g.DefineSameAsFirst(node), g.UseRegister(node->InputAt(0)),        \
+           g.UseImmediate(lane), g.UseRegister(node->InputAt(1)));            \
     }                                                                         \
   }
-SIMD_TYPES(SIMD_VISIT_REPLACE_LANE)
+SIMD_VISIT_REPLACE_LANE(F64x2, F, 64)
+SIMD_VISIT_REPLACE_LANE(F32x4, F, 32)
+SIMD_VISIT_REPLACE_LANE(I64x2, I, 64)
+SIMD_VISIT_REPLACE_LANE(I32x4, I, 32)
+SIMD_VISIT_REPLACE_LANE(I16x8, I, 16)
+SIMD_VISIT_REPLACE_LANE(I8x16, I, 8)
 #undef SIMD_VISIT_REPLACE_LANE
 
 #define SIMD_VISIT_BINOP(Opcode)                                             \
@@ -3471,7 +3494,10 @@ void InstructionSelectorT<Adapter>::VisitI8x16Shuffle(node_t node) {
   } else {
     uint8_t shuffle[kSimd128Size];
     bool is_swizzle;
-    CanonicalizeShuffle(node, shuffle, &is_swizzle);
+    // TODO(nicohartmann@): Properly use view here once Turboshaft support is
+    // implemented.
+    auto view = this->simd_shuffle_view(node);
+    CanonicalizeShuffle(view, shuffle, &is_swizzle);
     PPCOperandGeneratorT<Adapter> g(this);
     Node* input0 = node->InputAt(0);
     Node* input1 = node->InputAt(1);
@@ -3494,6 +3520,13 @@ void InstructionSelectorT<Adapter>::VisitI8x16Shuffle(node_t node) {
          g.UseImmediate(wasm::SimdShuffle::Pack4Lanes(shuffle_remapped + 12)));
   }
 }
+
+template <>
+void InstructionSelectorT<TurbofanAdapter>::VisitSetStackPointer(Node* node) {
+  // TODO(thibaudm): Implement.
+  UNREACHABLE();
+}
+
 #else
 template <typename Adapter>
 void InstructionSelectorT<Adapter>::VisitI8x16Shuffle(node_t node) {

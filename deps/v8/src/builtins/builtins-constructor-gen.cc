@@ -37,6 +37,19 @@ void Builtins::Generate_ConstructFunctionForwardVarargs(MacroAssembler* masm) {
       BUILTIN_CODE(masm->isolate(), ConstructFunction));
 }
 
+// static
+void Builtins::Generate_InterpreterForwardAllArgsThenConstruct(
+    MacroAssembler* masm) {
+  return Generate_ConstructForwardAllArgsImpl(masm,
+                                              ForwardWhichFrame::kParentFrame);
+}
+
+// static
+void Builtins::Generate_ConstructForwardAllArgs(MacroAssembler* masm) {
+  return Generate_ConstructForwardAllArgsImpl(masm,
+                                              ForwardWhichFrame::kCurrentFrame);
+}
+
 TF_BUILTIN(Construct_Baseline, CallOrConstructBuiltinsAssembler) {
   auto target = Parameter<Object>(Descriptor::kTarget);
   auto new_target = Parameter<Object>(Descriptor::kNewTarget);
@@ -174,6 +187,46 @@ void CallOrConstructBuiltinsAssembler::BuildConstructWithSpread(
   CallOrConstructWithSpread(target, new_target, spread, argc, eager_context);
 }
 
+TF_BUILTIN(ConstructForwardAllArgs_Baseline, CallOrConstructBuiltinsAssembler) {
+  auto target = Parameter<Object>(Descriptor::kTarget);
+  auto new_target = Parameter<Object>(Descriptor::kNewTarget);
+  auto slot = UncheckedParameter<UintPtrT>(Descriptor::kSlot);
+
+  return BuildConstructForwardAllArgs(
+      target, new_target, [=] { return LoadContextFromBaseline(); },
+      [=] { return LoadFeedbackVectorFromBaseline(); }, slot);
+}
+
+TF_BUILTIN(ConstructForwardAllArgs_WithFeedback,
+           CallOrConstructBuiltinsAssembler) {
+  auto target = Parameter<Object>(Descriptor::kTarget);
+  auto new_target = Parameter<Object>(Descriptor::kNewTarget);
+  auto slot = UncheckedParameter<UintPtrT>(Descriptor::kSlot);
+  auto feedback_vector = Parameter<HeapObject>(Descriptor::kVector);
+  auto context = Parameter<Context>(Descriptor::kContext);
+
+  return BuildConstructForwardAllArgs(
+      target, new_target, [=] { return context; },
+      [=] { return feedback_vector; }, slot);
+}
+
+void CallOrConstructBuiltinsAssembler::BuildConstructForwardAllArgs(
+    TNode<Object> target, TNode<Object> new_target,
+    const LazyNode<Context>& context,
+    const LazyNode<HeapObject>& feedback_vector, TNode<UintPtrT> slot) {
+  TVARIABLE(AllocationSite, allocation_site);
+  TNode<Context> eager_context = context();
+
+  Label construct(this);
+  CollectConstructFeedback(eager_context, target, new_target, feedback_vector(),
+                           slot, UpdateFeedbackMode::kGuaranteedFeedback,
+                           &construct, &construct, &allocation_site);
+
+  BIND(&construct);
+  TailCallBuiltin(Builtin::kConstructForwardAllArgs, eager_context, target,
+                  new_target);
+}
+
 TF_BUILTIN(FastNewClosure, ConstructorBuiltinsAssembler) {
   auto shared_function_info =
       Parameter<SharedFunctionInfo>(Descriptor::kSharedFunctionInfo);
@@ -252,9 +305,9 @@ TF_BUILTIN(FastNewClosure, ConstructorBuiltinsAssembler) {
   StoreObjectFieldNoWriteBarrier(result, JSFunction::kSharedFunctionInfoOffset,
                                  shared_function_info);
   StoreObjectFieldNoWriteBarrier(result, JSFunction::kContextOffset, context);
-  TNode<Code> lazy_builtin = HeapConstant(BUILTIN_CODE(isolate(), CompileLazy));
-  StoreMaybeIndirectPointerField(result, JSFunction::kCodeOffset,
-                                 kCodeIndirectPointerTag, lazy_builtin);
+  TNode<Code> lazy_builtin =
+      HeapConstantNoHole(BUILTIN_CODE(isolate(), CompileLazy));
+  StoreCodePointerField(result, JSFunction::kCodeOffset, lazy_builtin);
   Return(result);
 }
 

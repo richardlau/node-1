@@ -306,7 +306,7 @@ class TestCase(object):
 
   @property
   def is_slow(self):
-    return self.is_heavy or statusfile.SLOW in self._statusfile_outcomes
+    return statusfile.SLOW in self._statusfile_outcomes
 
   @property
   def is_fail_ok(self):
@@ -451,6 +451,7 @@ class TestCase(object):
         verbose=self.test_config.verbose,
         test_case=self,
         handle_sigterm=True,
+        log_process_stats=self.test_config.log_process_stats,
     )
 
   def _parse_source_flags(self, source=None):

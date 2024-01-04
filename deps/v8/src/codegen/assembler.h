@@ -148,7 +148,7 @@ struct JumpOptimizationInfo {
   std::map<int, int> align_pos_size;
 
   int farjmp_num = 0;
-  // For collecting stage, should contains all far jump informatino after
+  // For collecting stage, should contains all far jump information after
   // collecting.
   std::vector<JumpInfo> farjmps;
 
@@ -204,7 +204,7 @@ enum class BuiltinCallJumpMode {
   // 1) we encode the target as an offset from the code range which is not
   // always available (32-bit architectures don't have it),
   // 2) serialization of RelocInfo::RUNTIME_ENTRY is not implemented yet.
-  // TODO(v8:11527): Address the resons above and remove the kForMksnapshot in
+  // TODO(v8:11527): Address the reasons above and remove the kForMksnapshot in
   // favor of kPCRelative or kIndirect.
   kForMksnapshot,
 };
@@ -250,6 +250,8 @@ struct V8_EXPORT_PRIVATE AssemblerOptions {
   // Whether to emit code comments.
   bool emit_code_comments = v8_flags.code_comments;
 
+  bool is_wasm = false;
+
   static AssemblerOptions Default(Isolate* isolate);
 };
 
@@ -267,8 +269,8 @@ class AssemblerBuffer {
 
 // Describes a HeapObject slot containing a pointer to another HeapObject. Such
 // a slot can either contain a direct/tagged pointer, or an indirect pointer
-// (i.e. an index into an indirect pointer table, which then contains the
-// actual pointer to the object) together with a specific IndirectPointerTag.
+// (i.e. an index into a pointer table, which then contains the actual pointer
+// to the object) together with a specific IndirectPointerTag.
 class SlotDescriptor {
  public:
   bool contains_direct_pointer() const {
@@ -292,12 +294,16 @@ class SlotDescriptor {
     return SlotDescriptor(tag);
   }
 
-  static SlotDescriptor ForMaybeIndirectPointerSlot(IndirectPointerTag tag) {
+  static SlotDescriptor ForTrustedPointerSlot(IndirectPointerTag tag) {
 #ifdef V8_ENABLE_SANDBOX
     return ForIndirectPointerSlot(tag);
 #else
     return ForDirectPointerSlot();
 #endif
+  }
+
+  static SlotDescriptor ForCodePointerSlot() {
+    return ForTrustedPointerSlot(kCodeIndirectPointerTag);
   }
 
  private:

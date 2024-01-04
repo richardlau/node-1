@@ -454,10 +454,33 @@ void Serializer::ObjectSerializer::SerializePrologue(SnapshotSpace space,
   }
 
   if (map.SafeEquals(*object_)) {
-    DCHECK_EQ(*object_, ReadOnlyRoots(isolate()).meta_map());
-    DCHECK_EQ(space, SnapshotSpace::kReadOnlyHeap);
-    sink_->Put(kNewMetaMap, "NewMetaMap");
+    if (map == ReadOnlyRoots(isolate()).meta_map()) {
+      DCHECK_EQ(space, SnapshotSpace::kReadOnlyHeap);
+      sink_->Put(kNewContextlessMetaMap, "NewContextlessMetaMap");
+    } else {
+      DCHECK_EQ(space, SnapshotSpace::kOld);
+      DCHECK(IsContext(map->native_context_or_null()));
+      sink_->Put(kNewContextfulMetaMap, "NewContextfulMetaMap");
 
+      // Defer serialization of the native context in order to break
+      // a potential cycle through the map slot:
+      //   MAP -> meta map -> NativeContext -> ... -> MAP
+      // Otherwise it'll be a "forward ref to a map" problem: deserializer
+      // will not be able to create {obj} because {MAP} is not deserialized yet.
+      Tagged<NativeContext> native_context = map->native_context();
+
+      // Sanity check - the native context must not be serialized yet since
+      // it has a contextful map and thus the respective meta map must be
+      // serialized first. So we don't have to search the native context
+      // among the back refs before adding it to the deferred queue.
+      DCHECK_NULL(
+          serializer_->reference_map()->LookupReference(native_context));
+
+      if (!serializer_->forward_refs_per_pending_object_.Find(native_context)) {
+        serializer_->RegisterObjectIsPending(native_context);
+        serializer_->QueueDeferredObject(native_context);
+      }
+    }
     DCHECK_EQ(size, Map::kSize);
   } else {
     sink_->Put(NewObject::Encode(space), "NewObject");
@@ -480,6 +503,15 @@ void Serializer::ObjectSerializer::SerializePrologue(SnapshotSpace space,
     DCHECK_IMPLIES(
         !serializer_->IsNotMappedSymbol(*object_),
         serializer_->reference_map()->LookupReference(object_) == nullptr);
+
+    // To support deserializing pending objects referenced through indirect
+    // pointers, we need to make sure that the 'self' indirect pointer is
+    // initialized before the pending reference is resolved. Otherwise, the
+    // object cannot be referenced.
+    if (V8_ENABLE_SANDBOX_BOOL && IsExposedTrustedObject(*object_)) {
+      sink_->Put(kInitializeSelfIndirectPointer,
+                 "InitializeSelfIndirectPointer");
+    }
 
     // Now that the object is allocated, we can resolve pending references to
     // it.
@@ -1121,25 +1153,46 @@ void Serializer::ObjectSerializer::VisitExternalPointer(
 void Serializer::ObjectSerializer::VisitIndirectPointer(
     Tagged<HeapObject> host, IndirectPointerSlot slot,
     IndirectPointerMode mode) {
-  DCHECK(V8_ENABLE_SANDBOX_BOOL);
+#ifdef V8_ENABLE_SANDBOX
+  // If the slot is empty (i.e. contains a null handle), then we can just skip
+  // it since in that case the correct action is to encode the null handle as
+  // raw data, which will automatically happen if the slot is skipped here.
+  if (slot.IsEmpty()) return;
+
+  // If necessary, output any raw data preceeding this slot.
+  OutputRawData(slot.address());
 
   // The slot must be properly initialized at this point, so will always contain
   // a reference to a HeapObject.
   Handle<HeapObject> slot_value(HeapObject::cast(slot.load(isolate())),
                                 isolate());
   CHECK(IsHeapObject(*slot_value));
-  bytes_processed_so_far_ += kIndirectPointerSlotSize;
+  bytes_processed_so_far_ += kIndirectPointerSize;
 
-  // Currently, we only reference Code objects through indirect pointers, and
-  // we only serialize builtin Code objects which end up in the RO snapshot, so
-  // we cannot see pending objects here. However, we'll need to handle pending
-  // objects here and in the deserializer once we reference other types of
-  // objects through indirect pointers.
-  CHECK_EQ(slot.tag(), kCodeIndirectPointerTag);
-  DCHECK(IsJSFunction(host) && IsCode(*slot_value));
-  DCHECK(!serializer_->SerializePendingObject(*slot_value));
+  // Currently we cannot see pending objects here, but we may need to support
+  // them in the future. They should already be supported by the deserializer.
+  CHECK(!serializer_->SerializePendingObject(*slot_value));
   sink_->Put(kIndirectPointerPrefix, "IndirectPointer");
   serializer_->SerializeObject(slot_value, SlotType::kAnySlot);
+#else
+  UNREACHABLE();
+#endif
+}
+
+void Serializer::ObjectSerializer::VisitTrustedPointerTableEntry(
+    Tagged<HeapObject> host, IndirectPointerSlot slot) {
+#ifdef V8_ENABLE_SANDBOX
+  // These fields only exist on the ExposedTrustedObject class, and they are
+  // located directly after the Map word.
+  DCHECK_EQ(bytes_processed_so_far_,
+            ExposedTrustedObject::kSelfIndirectPointerOffset);
+
+  // Nothing to do here. We already emitted the kInitializeSelfIndirectPointer
+  // after processing the Map word in SerializePrologue.
+  bytes_processed_so_far_ += kIndirectPointerSize;
+#else
+  UNREACHABLE();
+#endif
 }
 
 namespace {
@@ -1214,7 +1267,7 @@ void Serializer::ObjectSerializer::OutputRawData(Address up_to) {
       // When the sandbox is enabled, this field contains the handle to this
       // Code object's code pointer table entry. This will be recomputed after
       // deserialization.
-      static uint8_t field_value[kIndirectPointerSlotSize] = {0};
+      static uint8_t field_value[kIndirectPointerSize] = {0};
       OutputRawWithCustomField(sink_, object_start, base, bytes_to_output,
                                Code::kSelfIndirectPointerOffset,
                                sizeof(field_value), field_value);

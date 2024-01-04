@@ -20,6 +20,21 @@ OBJECT_CONSTRUCTORS_IMPL(TrustedObject, HeapObject)
 CAST_ACCESSOR(ExposedTrustedObject)
 OBJECT_CONSTRUCTORS_IMPL(ExposedTrustedObject, TrustedObject)
 
+void ExposedTrustedObject::init_self_indirect_pointer(
+    IsolateForSandbox isolate) {
+#ifdef V8_ENABLE_SANDBOX
+  InitSelfIndirectPointerField(kSelfIndirectPointerOffset, isolate);
+#endif
+}
+
+IndirectPointerHandle ExposedTrustedObject::self_indirect_pointer() const {
+#ifdef V8_ENABLE_SANDBOX
+  return Relaxed_ReadField<IndirectPointerHandle>(kSelfIndirectPointerOffset);
+#else
+  UNREACHABLE();
+#endif
+}
+
 }  // namespace internal
 }  // namespace v8
 

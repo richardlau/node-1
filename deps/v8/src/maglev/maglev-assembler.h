@@ -338,10 +338,7 @@ class MaglevAssembler : public MacroAssembler {
   inline void IncrementAddress(Register reg, int32_t delta);
   inline void LoadAddress(Register dst, MemOperand location);
 
-  // Depending on architecture either pushes the address on the target to the
-  // stack or sets link register to the target.
-  // Returns the number of words actually pushed on the stack (0 or 1).
-  inline int PushOrSetReturnAddressTo(Label* target);
+  inline void Call(Label* target);
 
   inline void EmitEnterExitFrame(int extra_slots, StackFrame::Type frame_type,
                                  Register c_function, Register scratch);
@@ -362,6 +359,10 @@ class MaglevAssembler : public MacroAssembler {
   inline void Move(DoubleRegister dst, double n);
   inline void Move(DoubleRegister dst, Float64 n);
   inline void Move(Register dst, Handle<HeapObject> obj);
+
+  inline void MoveTagged(Register dst, Handle<HeapObject> obj);
+
+  inline void LoadMapForCompare(Register dst, Register obj);
 
   inline void LoadByte(Register dst, MemOperand src);
 
@@ -408,6 +409,21 @@ class MaglevAssembler : public MacroAssembler {
       bool fallthrough_when_false);
   inline void JumpIfJSAnyIsNotPrimitive(Register heap_object, Label* target,
                                         Label::Distance distance = Label::kFar);
+
+  inline void JumpIfStringMap(Register map, Label* target,
+                              Label::Distance distance = Label::kFar,
+                              bool jump_if_true = true);
+  inline void JumpIfString(Register heap_object, Label* target,
+                           Label::Distance distance = Label::kFar);
+  inline void JumpIfNotString(Register heap_object, Label* target,
+                              Label::Distance distance = Label::kFar);
+  inline void CheckJSAnyIsStringAndBranch(Register heap_object, Label* if_true,
+                                          Label::Distance true_distance,
+                                          bool fallthrough_when_true,
+                                          Label* if_false,
+                                          Label::Distance false_distance,
+                                          bool fallthrough_when_false);
+
   inline void CompareObjectTypeRange(Register heap_object,
                                      InstanceType lower_limit,
                                      InstanceType higher_limit);
@@ -495,6 +511,18 @@ class MaglevAssembler : public MacroAssembler {
   inline void CompareInt32AndBranch(Register r1, Register r2, Condition cond,
                                     BasicBlock* if_true, BasicBlock* if_false,
                                     BasicBlock* next_block);
+  inline void CompareInt32AndBranch(Register r1, int32_t value, Condition cond,
+                                    Label* if_true,
+                                    Label::Distance true_distance,
+                                    bool fallthrough_when_true, Label* if_false,
+                                    Label::Distance false_distance,
+                                    bool fallthrough_when_false);
+  inline void CompareInt32AndBranch(Register r1, Register r2, Condition cond,
+                                    Label* if_true,
+                                    Label::Distance true_distance,
+                                    bool fallthrough_when_true, Label* if_false,
+                                    Label::Distance false_distance,
+                                    bool fallthrough_when_false);
   inline void CompareInt32AndAssert(Register r1, Register r2, Condition cond,
                                     AbortReason reason);
   inline void CompareInt32AndAssert(Register r1, int32_t value, Condition cond,
@@ -562,6 +590,8 @@ class MaglevAssembler : public MacroAssembler {
   inline void SetMapAsRoot(Register object, RootIndex map);
 
   inline void LoadHeapNumberValue(DoubleRegister result, Register heap_number);
+  inline void LoadHeapNumberOrOddballValue(DoubleRegister result,
+                                           Register object);
 
   void LoadDataField(const PolymorphicAccessInfo& access_info, Register result,
                      Register object, Register scratch);

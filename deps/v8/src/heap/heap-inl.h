@@ -103,12 +103,6 @@ bool Heap::IsMainThread() const {
   return isolate()->thread_id() == ThreadId::Current();
 }
 
-bool Heap::IsSharedMainThread() const {
-  if (!isolate()->has_shared_space()) return false;
-  Isolate* shared_space_isolate = isolate()->shared_space_isolate();
-  return shared_space_isolate->thread_id() == ThreadId::Current();
-}
-
 int64_t Heap::external_memory() { return external_memory_.total(); }
 
 int64_t Heap::update_external_memory(int64_t delta) {
@@ -242,15 +236,15 @@ int Heap::MaxRegularHeapObjectSize(AllocationType allocation) {
 AllocationResult Heap::AllocateRaw(int size_in_bytes, AllocationType type,
                                    AllocationOrigin origin,
                                    AllocationAlignment alignment) {
-  return heap_allocator_.AllocateRaw(size_in_bytes, type, origin, alignment);
+  return heap_allocator_->AllocateRaw(size_in_bytes, type, origin, alignment);
 }
 
 Address Heap::AllocateRawOrFail(int size, AllocationType allocation,
                                 AllocationOrigin origin,
                                 AllocationAlignment alignment) {
   return heap_allocator_
-      .AllocateRawWith<HeapAllocator::kRetryOrFail>(size, allocation, origin,
-                                                    alignment)
+      ->AllocateRawWith<HeapAllocator::kRetryOrFail>(size, allocation, origin,
+                                                     alignment)
       .address();
 }
 
@@ -395,14 +389,19 @@ bool Heap::IsPendingAllocationInternal(Tagged<HeapObject> object) {
 
   switch (base_space->identity()) {
     case NEW_SPACE: {
-      return new_space_->main_allocator()->IsPendingAllocation(addr);
+      return allocator()->new_space_allocator()->IsPendingAllocation(addr);
     }
 
-    case OLD_SPACE:
-    case CODE_SPACE:
+    case OLD_SPACE: {
+      return allocator()->old_space_allocator()->IsPendingAllocation(addr);
+    }
+
+    case CODE_SPACE: {
+      return allocator()->code_space_allocator()->IsPendingAllocation(addr);
+    }
+
     case TRUSTED_SPACE: {
-      PagedSpace* paged_space = static_cast<PagedSpace*>(base_space);
-      return paged_space->main_allocator()->IsPendingAllocation(addr);
+      return allocator()->trusted_space_allocator()->IsPendingAllocation(addr);
     }
 
     case LO_SPACE:
@@ -551,6 +550,10 @@ AlwaysAllocateScopeForTesting::AlwaysAllocateScopeForTesting(Heap* heap)
 
 PagedNewSpace* Heap::paged_new_space() const {
   return PagedNewSpace::From(new_space());
+}
+
+SemiSpaceNewSpace* Heap::semi_space_new_space() const {
+  return SemiSpaceNewSpace::From(new_space());
 }
 
 #ifdef V8_ENABLE_THIRD_PARTY_HEAP

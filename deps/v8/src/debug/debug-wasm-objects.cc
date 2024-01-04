@@ -377,8 +377,8 @@ struct LocalsProxy : NamedDebugProxy<LocalsProxy, kLocalsProxy, FixedArray> {
     auto isolate = frame->isolate();
     auto debug_info = frame->native_module()->GetDebugInfo();
     // TODO(bmeurer): Check if pc is inspectable.
-    int count = debug_info->GetNumLocals(frame->pc());
-    auto function = debug_info->GetFunctionAtAddress(frame->pc());
+    int count = debug_info->GetNumLocals(frame->pc(), isolate);
+    auto function = debug_info->GetFunctionAtAddress(frame->pc(), isolate);
     auto values = isolate->factory()->NewFixedArray(count + 2);
     Handle<WasmModuleObject> module_object(
         frame->wasm_instance()->module_object(), isolate);
@@ -427,7 +427,7 @@ struct StackProxy : IndexedDebugProxy<StackProxy, kStackProxy, FixedArray> {
                           ->module_object()
                           ->native_module()
                           ->GetDebugInfo();
-    int count = debug_info->GetStackDepth(frame->pc());
+    int count = debug_info->GetStackDepth(frame->pc(), isolate);
     auto values = isolate->factory()->NewFixedArray(count);
     Handle<WasmModuleObject> module_object(
         frame->wasm_instance()->module_object(), isolate);
@@ -751,7 +751,7 @@ Handle<WasmValueObject> WasmValueObject::New(Isolate* isolate,
                                              Handle<Object> value) {
   auto maps = GetOrCreateDebugMaps(isolate);
   if (maps->is_the_hole(isolate, kWasmValueMapIndex)) {
-    Handle<Map> map = isolate->factory()->NewMap(
+    Handle<Map> map = isolate->factory()->NewContextfulMapForCurrentContext(
         WASM_VALUE_OBJECT_TYPE, WasmValueObject::kSize,
         TERMINAL_FAST_ELEMENTS_KIND, 2);
     Map::EnsureDescriptorSlack(isolate, map, 2);
@@ -920,7 +920,11 @@ Handle<WasmValueObject> WasmValueObject::New(
     case wasm::kRefNull:
     case wasm::kRef: {
       Handle<Object> ref = value.to_ref();
-      if (IsWasmStruct(*ref)) {
+      if (value.type().heap_type().representation() == wasm::HeapType::kExn) {
+        t = isolate->factory()->InternalizeString(
+            base::StaticCharVector("exnref"));
+        v = ref;
+      } else if (IsWasmStruct(*ref)) {
         Tagged<WasmTypeInfo> type_info =
             HeapObject::cast(*ref)->map()->wasm_type_info();
         wasm::ValueType type = wasm::ValueType::FromIndex(

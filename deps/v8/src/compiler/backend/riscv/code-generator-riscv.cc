@@ -280,6 +280,7 @@ Condition FlagsConditionToConditionOvf(FlagsCondition condition) {
   UNREACHABLE();
 }
 #endif
+
 FPUCondition FlagsConditionToConditionCmpFPU(bool* predicate,
                                              FlagsCondition condition) {
   switch (condition) {
@@ -290,12 +291,14 @@ FPUCondition FlagsConditionToConditionCmpFPU(bool* predicate,
       *predicate = false;
       return EQ;
     case kUnsignedLessThan:
+    case kFloatLessThan:
       *predicate = true;
       return LT;
     case kUnsignedGreaterThanOrEqual:
       *predicate = false;
       return LT;
     case kUnsignedLessThanOrEqual:
+    case kFloatLessThanOrEqual:
       *predicate = true;
       return LE;
     case kUnsignedGreaterThan:
@@ -305,6 +308,12 @@ FPUCondition FlagsConditionToConditionCmpFPU(bool* predicate,
     case kUnorderedNotEqual:
       *predicate = true;
       break;
+    case kFloatGreaterThan:
+      *predicate = true;
+      return GT;
+    case kFloatGreaterThanOrEqual:
+      *predicate = true;
+      return GE;
     default:
       *predicate = true;
       break;
@@ -834,8 +843,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
         // We don't actually want to generate a pile of code for this, so just
         // claim there is a stack frame, without generating one.
         FrameScope scope(masm(), StackFrame::NO_FRAME_TYPE);
-        __ Call(isolate()->builtins()->code_handle(Builtin::kAbortCSADcheck),
-                RelocInfo::CODE_TARGET);
+        __ CallBuiltin(Builtin::kAbortCSADcheck);
       }
       __ stop();
       break;
@@ -858,6 +866,9 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
     case kArchRet:
       AssembleReturn(instr->InputAt(0));
       break;
+    case kArchStackPointer:
+    case kArchSetStackPointer:
+      UNREACHABLE();
     case kArchStackPointerGreaterThan:
       // Pseudo-instruction used for cmp/branch. No opcode emitted here.
       break;
@@ -4123,15 +4134,14 @@ void CodeGenerator::AssembleConstructFrame() {
       // exception unconditionally. Thereby we can avoid the integer overflow
       // check in the condition code.
       if ((required_slots * kSystemPointerSize) <
-          (v8_flags.stack_size * 1024)) {
-        __ LoadWord(
-            kScratchReg,
-            FieldMemOperand(kWasmInstanceRegister,
-                            WasmInstanceObject::kRealStackLimitAddressOffset));
-        __ LoadWord(kScratchReg, MemOperand(kScratchReg));
-        __ AddWord(kScratchReg, kScratchReg,
-                   Operand(required_slots * kSystemPointerSize));
-        __ BranchShort(&done, uge, sp, Operand(kScratchReg));
+          (v8_flags.stack_size * KB)) {
+        UseScratchRegisterScope temps(masm());
+        Register stack_limit = temps.Acquire();
+        __ LoadStackLimit(stack_limit,
+                          MacroAssembler::StackLimitKind::kRealStackLimit);
+        __ AddWord(stack_limit, stack_limit,
+                 Operand(required_slots * kSystemPointerSize));
+        __ Branch(&done, uge, sp, Operand(stack_limit));
       }
 
       __ Call(static_cast<intptr_t>(Builtin::kWasmStackOverflow),
@@ -4487,7 +4497,16 @@ void CodeGenerator::AssembleMove(InstructionOperand* source,
       FPURegister src = g.ToDoubleRegister(source);
       if (destination->IsFPRegister()) {
         FPURegister dst = g.ToDoubleRegister(destination);
-        __ Move(dst, src);
+        if (rep == MachineRepresentation::kFloat32) {
+          // In src/builtins/wasm-to-js.tq:193
+          //*toRef =
+          //Convert<intptr>(Bitcast<uint32>(WasmTaggedToFloat32(retVal))); so
+          // high 32 of src is 0. fmv.s can't NaNBox src.
+          __ fmv_x_w(kScratchReg, src);
+          __ fmv_w_x(dst, kScratchReg);
+        } else {
+          __ MoveDouble(dst, src);
+        }
       } else {
         DCHECK(destination->IsFPStackSlot());
         if (rep == MachineRepresentation::kFloat32) {

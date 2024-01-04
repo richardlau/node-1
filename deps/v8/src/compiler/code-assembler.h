@@ -64,6 +64,7 @@ class JSFinalizationRegistry;
 class JSWeakMap;
 class JSWeakRef;
 class JSWeakSet;
+class OSROptimizedCodeCache;
 class ProfileDataFromFile;
 class PromiseCapability;
 class PromiseFulfillReactionJobTask;
@@ -553,10 +554,20 @@ class V8_EXPORT_PRIVATE CodeAssembler {
     static_assert(sizeof(E) <= sizeof(int));
     return SmiConstant(static_cast<int>(value));
   }
-  TNode<HeapObject> UntypedHeapConstant(Handle<HeapObject> object);
+  TNode<HeapObject> UntypedHeapConstantNoHole(Handle<HeapObject> object);
+  TNode<HeapObject> UntypedHeapConstantMaybeHole(Handle<HeapObject> object);
+  TNode<HeapObject> UntypedHeapConstantHole(Handle<HeapObject> object);
   template <class Type>
-  TNode<Type> HeapConstant(Handle<Type> object) {
-    return UncheckedCast<Type>(UntypedHeapConstant(object));
+  TNode<Type> HeapConstantNoHole(Handle<Type> object) {
+    return UncheckedCast<Type>(UntypedHeapConstantNoHole(object));
+  }
+  template <class Type>
+  TNode<Type> HeapConstantMaybeHole(Handle<Type> object) {
+    return UncheckedCast<Type>(UntypedHeapConstantMaybeHole(object));
+  }
+  template <class Type>
+  TNode<Type> HeapConstantHole(Handle<Type> object) {
+    return UncheckedCast<Type>(UntypedHeapConstantHole(object));
   }
   TNode<String> StringConstant(const char* str);
   TNode<Boolean> BooleanConstant(bool value);
@@ -737,12 +748,19 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   void Switch(Node* index, Label* default_label, const int32_t* case_values,
               Label** case_labels, size_t case_count);
 
-  // Access to the frame pointer
+  // Access to the frame pointer.
   TNode<RawPtrT> LoadFramePointer();
   TNode<RawPtrT> LoadParentFramePointer();
   TNode<RawPtrT> StackSlotPtr(int size, int alignment);
 
+#if V8_ENABLE_WEBASSEMBLY
+  // Access to the stack pointer.
+  TNode<RawPtrT> LoadStackPointer();
+  void SetStackPointer(TNode<RawPtrT> ptr, wasm::FPRelativeScope fp_scope);
+#endif  // V8_ENABLE_WEBASSEMBLY
+
   TNode<RawPtrT> LoadPointerFromRootRegister(TNode<IntPtrT> offset);
+  TNode<Uint8T> LoadUint8FromRootRegister(TNode<IntPtrT> offset);
 
   // Load raw memory location.
   Node* Load(MachineType type, Node* base);
@@ -1164,6 +1182,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   // int_min instead of int_max on arm platforms by using parameter
   // kSetOverflowToMin.
   TNode<Int32T> TruncateFloat32ToInt32(TNode<Float32T> value);
+  TNode<Int64T> TruncateFloat64ToInt64(TNode<Float64T> value);
 
   // Projections
   template <int index, class T1, class T2>
@@ -1205,7 +1224,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   template <class T = Object, class... TArgs>
   TNode<T> CallStub(Callable const& callable, TNode<Object> context,
                     TArgs... args) {
-    TNode<Code> target = HeapConstant(callable.code());
+    TNode<Code> target = HeapConstantNoHole(callable.code());
     return CallStub<T>(callable.descriptor(), target, context, args...);
   }
 
@@ -1219,7 +1238,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   template <class... TArgs>
   void CallStubVoid(Callable const& callable, TNode<Object> context,
                     TArgs... args) {
-    TNode<Code> target = HeapConstant(callable.code());
+    TNode<Code> target = HeapConstantNoHole(callable.code());
     CallStubR(StubCallMode::kCallCodeObject, callable.descriptor(), target,
               context, args...);
   }
@@ -1235,7 +1254,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
   template <class... TArgs>
   void TailCallStub(Callable const& callable, TNode<Object> context,
                     TArgs... args) {
-    TNode<Code> target = HeapConstant(callable.code());
+    TNode<Code> target = HeapConstantNoHole(callable.code());
     TailCallStub(callable.descriptor(), target, context, args...);
   }
 
@@ -1273,7 +1292,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
                        Node* receiver, TArgs... args) {
     int argc = JSParameterCount(static_cast<int>(sizeof...(args)));
     TNode<Int32T> arity = Int32Constant(argc);
-    TNode<Code> target = HeapConstant(callable.code());
+    TNode<Code> target = HeapConstantNoHole(callable.code());
     return CAST(CallJSStubImpl(callable.descriptor(), target, CAST(context),
                                CAST(function), {}, arity, {receiver, args...}));
   }
@@ -1284,7 +1303,7 @@ class V8_EXPORT_PRIVATE CodeAssembler {
     int argc = JSParameterCount(static_cast<int>(sizeof...(args)));
     TNode<Int32T> arity = Int32Constant(argc);
     TNode<Object> receiver = LoadRoot(RootIndex::kUndefinedValue);
-    TNode<Code> target = HeapConstant(callable.code());
+    TNode<Code> target = HeapConstantNoHole(callable.code());
     return CallJSStubImpl(callable.descriptor(), target, CAST(context),
                           CAST(function), CAST(new_target), arity,
                           {receiver, args...});

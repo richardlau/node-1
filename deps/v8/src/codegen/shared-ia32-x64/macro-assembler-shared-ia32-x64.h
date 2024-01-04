@@ -747,44 +747,32 @@ class V8_EXPORT_PRIVATE SharedMacroAssembler : public SharedMacroAssemblerBase {
     }
   }
 
-  void I32x4TruncF64x2UZero(XMMRegister dst, XMMRegister src, Register tmp,
-                            XMMRegister scratch) {
-    // TODO(zhin): call this from I32x4TruncSatF64x2UZero.
-    ASM_CODE_COMMENT(this);
-    if (dst != src && !CpuFeatures::IsSupported(AVX)) {
-      movaps(dst, src);
-      src = dst;
-    }
-    // Same as I32x4TruncSatF64x2UZero but without the saturation.
-    Roundpd(dst, src, kRoundToZero);
-    // Add to special double where significant bits == uint32.
-    Addpd(dst, dst,
-          ExternalReferenceAsOperand(
-              ExternalReference::address_of_wasm_double_2_power_52(), tmp));
-    // Extract low 32 bits of each double's significand, zero top lanes.
-    // dst = [dst[0], dst[2], 0, 0]
-    Xorps(scratch, scratch, scratch);
-    Shufps(dst, dst, scratch, 0x88);
-  }
-
   void I32x4TruncF32x4U(XMMRegister dst, XMMRegister src, Register scratch,
                         XMMRegister tmp) {
     ASM_CODE_COMMENT(this);
     Operand int32_overflow_op = ExternalReferenceAsOperand(
         ExternalReference::address_of_wasm_int32_overflow_as_float(), scratch);
+
+    // NAN->0, negative->0.
+    Pxor(tmp, tmp);
+    if (CpuFeatures::IsSupported(AVX)) {
+      CpuFeatureScope scope(this, AVX);
+      vmaxps(dst, src, tmp);
+    } else {
+      if (dst != src) movaps(dst, src);
+      maxps(dst, tmp);
+    }
+
     if (CpuFeatures::IsSupported(AVX)) {
       CpuFeatureScope avx_scope(this, AVX);
-      vcmpltps(tmp, src, int32_overflow_op);
+      vcmpltps(tmp, dst, int32_overflow_op);
     } else {
-      movaps(tmp, src);
+      movaps(tmp, dst);
       cmpltps(tmp, int32_overflow_op);
     }
     // In tmp, lanes < INT32_MAX are left alone, other lanes are zeroed.
-    Pand(tmp, src);
+    Pand(tmp, dst);
     // tmp = src with all the valid conversions
-    if (dst != src) {
-      Movaps(dst, src);
-    }
     // In dst, lanes < INT32_MAX are zeroed, other lanes left alone.
     Pxor(dst, tmp);
     // tmp contains only lanes which can be converted correctly (<INT32_MAX)

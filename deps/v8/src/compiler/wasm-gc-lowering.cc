@@ -61,10 +61,10 @@ Reduction WasmGCLowering::Reduce(Node* node) {
       return ReduceRttCanon(node);
     case IrOpcode::kTypeGuard:
       return ReduceTypeGuard(node);
-    case IrOpcode::kWasmExternInternalize:
-      return ReduceWasmExternInternalize(node);
-    case IrOpcode::kWasmExternExternalize:
-      return ReduceWasmExternExternalize(node);
+    case IrOpcode::kWasmAnyConvertExtern:
+      return ReduceWasmAnyConvertExtern(node);
+    case IrOpcode::kWasmExternConvertAny:
+      return ReduceWasmExternConvertAny(node);
     case IrOpcode::kWasmStructGet:
       return ReduceWasmStructGet(node);
     case IrOpcode::kWasmStructSet:
@@ -87,7 +87,9 @@ Reduction WasmGCLowering::Reduce(Node* node) {
 }
 
 Node* WasmGCLowering::Null(wasm::ValueType type) {
-  RootIndex index = wasm::IsSubtypeOf(type, wasm::kWasmExternRef, module_)
+  // TODO(thibaudm): Can we use wasm null for exnref?
+  RootIndex index = wasm::IsSubtypeOf(type, wasm::kWasmExternRef, module_) ||
+                            wasm::IsSubtypeOf(type, wasm::kWasmExnRef, module_)
                         ? RootIndex::kNullValue
                         : RootIndex::kWasmNull;
   return gasm_.LoadImmutable(MachineType::Pointer(), gasm_.LoadRootRegister(),
@@ -97,10 +99,12 @@ Node* WasmGCLowering::Null(wasm::ValueType type) {
 Node* WasmGCLowering::IsNull(Node* object, wasm::ValueType type) {
   Tagged_t static_null =
       wasm::GetWasmEngine()->compressed_wasm_null_value_or_zero();
-  Node* null_value = !wasm::IsSubtypeOf(type, wasm::kWasmExternRef, module_) &&
-                             static_null != 0
-                         ? gasm_.UintPtrConstant(static_null)
-                         : Null(type);
+  Node* null_value =
+      !wasm::IsSubtypeOf(type, wasm::kWasmExternRef, module_) &&
+              !wasm::IsSubtypeOf(type, wasm::kWasmExnRef, module_) &&
+              static_null != 0
+          ? gasm_.UintPtrConstant(static_null)
+          : Null(type);
   return gasm_.TaggedEqual(object, null_value);
 }
 
@@ -471,7 +475,8 @@ Reduction WasmGCLowering::ReduceAssertNotNull(Node* node) {
       if (null_check_strategy_ == NullCheckStrategy::kExplicit ||
           wasm::IsSubtypeOf(wasm::kWasmI31Ref.AsNonNull(), op_parameter.type,
                             module_) ||
-          wasm::IsSubtypeOf(op_parameter.type, wasm::kWasmExternRef, module_)) {
+          wasm::IsSubtypeOf(op_parameter.type, wasm::kWasmExternRef, module_) ||
+          wasm::IsSubtypeOf(op_parameter.type, wasm::kWasmExnRef, module_)) {
         gasm_.TrapIf(IsNull(object, op_parameter.type), op_parameter.trap_id);
         UpdateSourcePosition(gasm_.effect(), node);
       } else {
@@ -540,8 +545,8 @@ constexpr int32_t kInt31MaxValue = 0x3fffffff;
 constexpr int32_t kInt31MinValue = -kInt31MaxValue - 1;
 }  // namespace
 
-Reduction WasmGCLowering::ReduceWasmExternInternalize(Node* node) {
-  DCHECK_EQ(node->opcode(), IrOpcode::kWasmExternInternalize);
+Reduction WasmGCLowering::ReduceWasmAnyConvertExtern(Node* node) {
+  DCHECK_EQ(node->opcode(), IrOpcode::kWasmAnyConvertExtern);
   Node* input = NodeProperties::GetValueInput(node, 0);
   Node* effect = NodeProperties::GetEffectInput(node);
   Node* control = NodeProperties::GetControlInput(node);
@@ -636,8 +641,8 @@ Reduction WasmGCLowering::ReduceWasmExternInternalize(Node* node) {
   return Replace(end_label.PhiAt(0));
 }
 
-Reduction WasmGCLowering::ReduceWasmExternExternalize(Node* node) {
-  DCHECK_EQ(node->opcode(), IrOpcode::kWasmExternExternalize);
+Reduction WasmGCLowering::ReduceWasmExternConvertAny(Node* node) {
+  DCHECK_EQ(node->opcode(), IrOpcode::kWasmExternConvertAny);
   Node* object = node->InputAt(0);
   gasm_.InitializeEffectControl(NodeProperties::GetEffectInput(node),
                                 NodeProperties::GetControlInput(node));

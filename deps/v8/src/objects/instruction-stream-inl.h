@@ -20,15 +20,26 @@ namespace internal {
 CAST_ACCESSOR(InstructionStream)
 OBJECT_CONSTRUCTORS_IMPL(InstructionStream, HeapObject)
 NEVER_READ_ONLY_SPACE_IMPL(InstructionStream)
-DEF_PRIMITIVE_ACCESSORS(InstructionStream, body_size, kBodySizeOffset, uint32_t)
+
+uint32_t InstructionStream::body_size() const {
+  return ReadField<uint32_t>(kBodySizeOffset);
+}
 
 // TODO(sroettger): remove unused setter functions once all code writes go
 // through the WritableJitAllocation, e.g. the body_size setter above.
 
+#if V8_EMBEDDED_CONSTANT_POOL_BOOL
+Address InstructionStream::constant_pool() const {
+  return address() + ReadField<int>(kConstantPoolOffsetOffset);
+}
+#else
+Address InstructionStream::constant_pool() const { return kNullAddress; }
+#endif
+
 // static
 Tagged<InstructionStream> InstructionStream::Initialize(
     Tagged<HeapObject> self, Tagged<Map> map, uint32_t body_size,
-    Tagged<ByteArray> reloc_info) {
+    int constant_pool_offset, Tagged<ByteArray> reloc_info) {
   {
     WritableJitAllocation writable_allocation =
         ThreadIsolation::RegisterInstructionStreamAllocation(
@@ -38,6 +49,11 @@ Tagged<InstructionStream> InstructionStream::Initialize(
     writable_allocation.WriteHeaderSlot<Map, kMapOffset>(map, kRelaxedStore);
 
     writable_allocation.WriteHeaderSlot<uint32_t, kBodySizeOffset>(body_size);
+
+    if constexpr (V8_EMBEDDED_CONSTANT_POOL_BOOL) {
+      writable_allocation.WriteHeaderSlot<int, kConstantPoolOffsetOffset>(
+          kHeaderSize + constant_pool_offset);
+    }
 
     // During the Code initialization process, InstructionStream::code is
     // briefly unset (the Code object has not been allocated yet). In this state
@@ -106,7 +122,7 @@ void InstructionStream::Finalize(Tagged<Code> code,
   // Copy the relocation info first before we unlock the Jit allocation.
   // TODO(sroettger): reloc info should live in protected memory.
   DCHECK_EQ(reloc_info->length(), desc.reloc_size);
-  CopyBytes(reloc_info->GetDataStartAddress(), desc.buffer + desc.reloc_offset,
+  CopyBytes(reloc_info->begin(), desc.buffer + desc.reloc_offset,
             static_cast<size_t>(desc.reloc_size));
 
   {
@@ -139,6 +155,10 @@ void InstructionStream::Finalize(Tagged<Code> code,
   CONDITIONAL_WRITE_BARRIER(*this, kCodeOffset, code, UPDATE_WRITE_BARRIER);
 
   code->FlushICache();
+}
+
+bool InstructionStream::IsFullyInitialized() {
+  return raw_code(kAcquireLoad) != Smi::zero();
 }
 
 Address InstructionStream::body_end() const {
@@ -200,11 +220,11 @@ Tagged<ByteArray> InstructionStream::unchecked_relocation_info() const {
 }
 
 uint8_t* InstructionStream::relocation_start() const {
-  return relocation_info()->GetDataStartAddress();
+  return relocation_info()->begin();
 }
 
 uint8_t* InstructionStream::relocation_end() const {
-  return relocation_info()->GetDataEndAddress();
+  return relocation_info()->end();
 }
 
 int InstructionStream::relocation_size() const {

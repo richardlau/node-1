@@ -850,8 +850,7 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
         // We don't actually want to generate a pile of code for this, so just
         // claim there is a stack frame, without generating one.
         FrameScope scope(masm(), StackFrame::NO_FRAME_TYPE);
-        __ Call(isolate()->builtins()->code_handle(Builtin::kAbortCSADcheck),
-                RelocInfo::CODE_TARGET);
+        __ CallBuiltin(Builtin::kAbortCSADcheck);
       }
       __ stop();
       unwinding_info_writer_.MarkBlockWillExit();
@@ -891,9 +890,11 @@ CodeGenerator::CodeGenResult CodeGenerator::AssembleArchInstruction(
         __ mov(i.OutputRegister(), fp);
       }
       break;
+#if V8_ENABLE_WEBASSEMBLY
     case kArchStackPointer:
     case kArchSetStackPointer:
       UNREACHABLE();
+#endif  // V8_ENABLE_WEBASSEMBLY
     case kArchStackPointerGreaterThan: {
       // Potentially apply an offset to the current stack pointer before the
       // comparison to consider the size difference of an optimized frame versus
@@ -3789,13 +3790,11 @@ void CodeGenerator::AssembleConstructFrame() {
       // check in the condition code.
       if (required_slots * kSystemPointerSize < v8_flags.stack_size * KB) {
         UseScratchRegisterScope temps(masm());
-        Register scratch = temps.Acquire();
-        __ ldr(scratch, FieldMemOperand(
-                            kWasmInstanceRegister,
-                            WasmInstanceObject::kRealStackLimitAddressOffset));
-        __ ldr(scratch, MemOperand(scratch));
-        __ add(scratch, scratch, Operand(required_slots * kSystemPointerSize));
-        __ cmp(sp, scratch);
+        Register stack_limit = temps.Acquire();
+        __ LoadStackLimit(stack_limit, StackLimitKind::kRealStackLimit);
+        __ add(stack_limit, stack_limit,
+               Operand(required_slots * kSystemPointerSize));
+        __ cmp(sp, stack_limit);
         __ b(cs, &done);
       }
 

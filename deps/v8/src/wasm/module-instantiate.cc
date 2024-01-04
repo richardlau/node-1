@@ -104,8 +104,9 @@ Handle<Map> CreateStructMap(Isolate* isolate, const WasmModule* module,
   Handle<WasmTypeInfo> type_info = isolate->factory()->NewWasmTypeInfo(
       reinterpret_cast<Address>(type), opt_rtt_parent, real_instance_size,
       instance, struct_index);
-  Handle<Map> map = isolate->factory()->NewMap(
-      instance_type, map_instance_size, elements_kind, inobject_properties);
+  Handle<Map> map = isolate->factory()->NewContextfulMap(
+      instance, instance_type, map_instance_size, elements_kind,
+      inobject_properties);
   map->set_wasm_type_info(*type_info);
   map->SetInstanceDescriptors(isolate,
                               *isolate->factory()->empty_descriptor_array(), 0);
@@ -127,8 +128,9 @@ Handle<Map> CreateArrayMap(Isolate* isolate, const WasmModule* module,
   Handle<WasmTypeInfo> type_info = isolate->factory()->NewWasmTypeInfo(
       reinterpret_cast<Address>(type), opt_rtt_parent, cached_instance_size,
       instance, array_index);
-  Handle<Map> map = isolate->factory()->NewMap(
-      instance_type, instance_size, elements_kind, inobject_properties);
+  Handle<Map> map = isolate->factory()->NewContextfulMap(
+      instance, instance_type, instance_size, elements_kind,
+      inobject_properties);
   map->set_wasm_type_info(*type_info);
   map->SetInstanceDescriptors(isolate,
                               *isolate->factory()->empty_descriptor_array(), 0);
@@ -341,6 +343,22 @@ bool IsI8Array(wasm::ValueType type, const WasmModule* module) {
          TypeCanonicalizer::kPredefinedArrayI8Index;
 }
 
+bool IsDataViewGetterSig(const wasm::FunctionSig* sig,
+                         wasm::ValueType return_type) {
+  return sig->parameter_count() == 3 && sig->return_count() == 1 &&
+         sig->GetParam(0) == wasm::kWasmExternRef &&
+         sig->GetParam(1) == wasm::kWasmI32 &&
+         sig->GetParam(2) == wasm::kWasmI32 && sig->GetReturn(0) == return_type;
+}
+
+bool IsDataViewSetterSig(const wasm::FunctionSig* sig,
+                         wasm::ValueType value_type) {
+  return sig->parameter_count() == 4 && sig->return_count() == 0 &&
+         sig->GetParam(0) == wasm::kWasmExternRef &&
+         sig->GetParam(1) == wasm::kWasmI32 && sig->GetParam(2) == value_type &&
+         sig->GetParam(3) == wasm::kWasmI32;
+}
+
 // This detects imports of the forms:
 // - `Function.prototype.call.bind(foo)`, where `foo` is something that has a
 //   Builtin id.
@@ -350,6 +368,7 @@ WellKnownImport CheckForWellKnownImport(Handle<WasmInstanceObject> instance,
                                         Handle<JSReceiver> callable,
                                         const wasm::FunctionSig* sig) {
   WellKnownImport kGeneric = WellKnownImport::kGeneric;  // "using" is C++20.
+  WellKnownImport kLinkError = WellKnownImport::kLinkError;
   if (instance.is_null()) return kGeneric;
   static constexpr ValueType kRefExtern = ValueType::Ref(HeapType::kExtern);
   // Check for plain JS functions.
@@ -361,20 +380,40 @@ WellKnownImport CheckForWellKnownImport(Handle<WasmInstanceObject> instance,
     // recognize receiver-requiring methods even when they're (erroneously)
     // being imported such that they don't get a receiver.
     switch (sfi->builtin_id()) {
+      // =================================================================
+      // WebAssembly.String.* imports. See:
+      // https://github.com/WebAssembly/js-string-builtins
+      // Contrary to the optional/unobservable internal optimizations
+      // handled by this function, the JS String Builtins spec wants us
+      // to throw a LinkError when the signature was incorrect.
+      case Builtin::kWebAssemblyStringCast:
+        if (sig->parameter_count() == 1 && sig->return_count() == 1 &&
+            sig->GetParam(0) == kWasmExternRef &&
+            sig->GetReturn(0) == kRefExtern) {
+          return WellKnownImport::kStringCast;
+        }
+        return kLinkError;
+      case Builtin::kWebAssemblyStringTest:
+        if (sig->parameter_count() == 1 && sig->return_count() == 1 &&
+            sig->GetParam(0) == kWasmExternRef &&
+            sig->GetReturn(0) == kWasmI32) {
+          return WellKnownImport::kStringTest;
+        }
+        return kLinkError;
       case Builtin::kWebAssemblyStringCharCodeAt:
         if (sig->parameter_count() == 2 && sig->return_count() == 1 &&
             sig->GetParam(0) == kWasmExternRef &&
             sig->GetParam(1) == kWasmI32 && sig->GetReturn(0) == kWasmI32) {
           return WellKnownImport::kStringCharCodeAt;
         }
-        break;
+        return kLinkError;
       case Builtin::kWebAssemblyStringCodePointAt:
         if (sig->parameter_count() == 2 && sig->return_count() == 1 &&
             sig->GetParam(0) == kWasmExternRef &&
             sig->GetParam(1) == kWasmI32 && sig->GetReturn(0) == kWasmI32) {
           return WellKnownImport::kStringCodePointAt;
         }
-        break;
+        return kLinkError;
       case Builtin::kWebAssemblyStringCompare:
         if (sig->parameter_count() == 2 && sig->return_count() == 1 &&
             sig->GetParam(0) == kWasmExternRef &&
@@ -382,7 +421,7 @@ WellKnownImport CheckForWellKnownImport(Handle<WasmInstanceObject> instance,
             sig->GetReturn(0) == kWasmI32) {
           return WellKnownImport::kStringCompare;
         }
-        break;
+        return kLinkError;
       case Builtin::kWebAssemblyStringConcat:
         if (sig->parameter_count() == 2 && sig->return_count() == 1 &&
             sig->GetParam(0) == kWasmExternRef &&
@@ -390,7 +429,7 @@ WellKnownImport CheckForWellKnownImport(Handle<WasmInstanceObject> instance,
             sig->GetReturn(0) == kRefExtern) {
           return WellKnownImport::kStringConcat;
         }
-        break;
+        return kLinkError;
       case Builtin::kWebAssemblyStringEquals:
         if (sig->parameter_count() == 2 && sig->return_count() == 1 &&
             sig->GetParam(0) == kWasmExternRef &&
@@ -398,19 +437,19 @@ WellKnownImport CheckForWellKnownImport(Handle<WasmInstanceObject> instance,
             sig->GetReturn(0) == kWasmI32) {
           return WellKnownImport::kStringEquals;
         }
-        break;
+        return kLinkError;
       case Builtin::kWebAssemblyStringFromCharCode:
         if (sig->parameter_count() == 1 && sig->return_count() == 1 &&
             sig->GetParam(0) == kWasmI32 && sig->GetReturn(0) == kRefExtern) {
           return WellKnownImport::kStringFromCharCode;
         }
-        break;
+        return kLinkError;
       case Builtin::kWebAssemblyStringFromCodePoint:
         if (sig->parameter_count() == 1 && sig->return_count() == 1 &&
             sig->GetParam(0) == kWasmI32 && sig->GetReturn(0) == kRefExtern) {
           return WellKnownImport::kStringFromCodePoint;
         }
-        break;
+        return kLinkError;
       case Builtin::kWebAssemblyStringFromWtf16Array:
         // i16array, i32, i32 -> extern
         if (sig->parameter_count() == 3 && sig->return_count() == 1 &&
@@ -419,7 +458,7 @@ WellKnownImport CheckForWellKnownImport(Handle<WasmInstanceObject> instance,
             sig->GetReturn(0) == kRefExtern) {
           return WellKnownImport::kStringFromWtf16Array;
         }
-        break;
+        return kLinkError;
       case Builtin::kWebAssemblyStringFromWtf8Array:
         // i8array, i32, i32 -> extern
         if (sig->parameter_count() == 3 && sig->return_count() == 1 &&
@@ -428,14 +467,14 @@ WellKnownImport CheckForWellKnownImport(Handle<WasmInstanceObject> instance,
             sig->GetReturn(0) == kRefExtern) {
           return WellKnownImport::kStringFromWtf8Array;
         }
-        break;
+        return kLinkError;
       case Builtin::kWebAssemblyStringLength:
         if (sig->parameter_count() == 1 && sig->return_count() == 1 &&
             sig->GetParam(0) == kWasmExternRef &&
             sig->GetReturn(0) == kWasmI32) {
           return WellKnownImport::kStringLength;
         }
-        break;
+        return kLinkError;
       case Builtin::kWebAssemblyStringSubstring:
         if (sig->parameter_count() == 3 && sig->return_count() == 1 &&
             sig->GetParam(0) == kWasmExternRef &&
@@ -443,7 +482,7 @@ WellKnownImport CheckForWellKnownImport(Handle<WasmInstanceObject> instance,
             sig->GetReturn(0) == kRefExtern) {
           return WellKnownImport::kStringSubstring;
         }
-        break;
+        return kLinkError;
       case Builtin::kWebAssemblyStringToWtf16Array:
         // string, i16array, i32 -> i32
         if (sig->parameter_count() == 3 && sig->return_count() == 1 &&
@@ -452,7 +491,11 @@ WellKnownImport CheckForWellKnownImport(Handle<WasmInstanceObject> instance,
             sig->GetParam(2) == kWasmI32 && sig->GetReturn(0) == kWasmI32) {
           return WellKnownImport::kStringToWtf16Array;
         }
-        break;
+        return kLinkError;
+
+        // =================================================================
+        // String-related imports that aren't part of the JS String Builtins
+        // proposal.
       case Builtin::kNumberParseFloat:
         if (sig->parameter_count() == 1 && sig->return_count() == 1 &&
             IsStringRef(sig->GetParam(0)) &&
@@ -498,16 +541,131 @@ WellKnownImport CheckForWellKnownImport(Handle<WasmInstanceObject> instance,
       if (sig->parameter_count() == 1 && sig->return_count() == 1 &&
           IsStringRef(sig->GetParam(0)) && IsStringRef(sig->GetReturn(0))) {
         return WellKnownImport::kStringToLowerCaseStringref;
+      } else if (sig->parameter_count() == 1 && sig->return_count() == 1 &&
+                 sig->GetParam(0) == wasm::kWasmExternRef &&
+                 sig->GetReturn(0) == wasm::kWasmExternRef) {
+        return WellKnownImport::kStringToLowerCaseImported;
       }
       break;
 #endif
-    case Builtin::kDataViewPrototypeGetInt32:
-      if (sig->parameter_count() == 3 && sig->return_count() == 1 &&
+    case Builtin::kDataViewPrototypeGetBigInt64:
+      if (IsDataViewGetterSig(sig, wasm::kWasmI64)) {
+        return WellKnownImport::kDataViewGetBigInt64;
+      }
+      break;
+    case Builtin::kDataViewPrototypeGetBigUint64:
+      if (IsDataViewGetterSig(sig, wasm::kWasmI64)) {
+        return WellKnownImport::kDataViewGetBigUint64;
+      }
+      break;
+    case Builtin::kDataViewPrototypeGetFloat32:
+      if (IsDataViewGetterSig(sig, wasm::kWasmF32)) {
+        return WellKnownImport::kDataViewGetFloat32;
+      }
+      break;
+    case Builtin::kDataViewPrototypeGetFloat64:
+      if (IsDataViewGetterSig(sig, wasm::kWasmF64)) {
+        return WellKnownImport::kDataViewGetFloat64;
+      }
+      break;
+    case Builtin::kDataViewPrototypeGetInt8:
+      if (sig->parameter_count() == 2 && sig->return_count() == 1 &&
           sig->GetParam(0) == wasm::kWasmExternRef &&
           sig->GetParam(1) == wasm::kWasmI32 &&
-          sig->GetParam(2) == wasm::kWasmI32 &&
           sig->GetReturn(0) == wasm::kWasmI32) {
+        return WellKnownImport::kDataViewGetInt8;
+      }
+      break;
+    case Builtin::kDataViewPrototypeGetInt16:
+      if (IsDataViewGetterSig(sig, wasm::kWasmI32)) {
+        return WellKnownImport::kDataViewGetInt16;
+      }
+      break;
+    case Builtin::kDataViewPrototypeGetInt32:
+      if (IsDataViewGetterSig(sig, wasm::kWasmI32)) {
         return WellKnownImport::kDataViewGetInt32;
+      }
+      break;
+    case Builtin::kDataViewPrototypeGetUint8:
+      if (sig->parameter_count() == 2 && sig->return_count() == 1 &&
+          sig->GetParam(0) == wasm::kWasmExternRef &&
+          sig->GetParam(1) == wasm::kWasmI32 &&
+          sig->GetReturn(0) == wasm::kWasmI32) {
+        return WellKnownImport::kDataViewGetUint8;
+      }
+      break;
+    case Builtin::kDataViewPrototypeGetUint16:
+      if (IsDataViewGetterSig(sig, wasm::kWasmI32)) {
+        return WellKnownImport::kDataViewGetUint16;
+      }
+      break;
+    case Builtin::kDataViewPrototypeGetUint32:
+      if (IsDataViewGetterSig(sig, wasm::kWasmI32)) {
+        return WellKnownImport::kDataViewGetUint32;
+      }
+      break;
+
+    case Builtin::kDataViewPrototypeSetBigInt64:
+      if (IsDataViewSetterSig(sig, wasm::kWasmI64)) {
+        return WellKnownImport::kDataViewSetBigInt64;
+      }
+      break;
+    case Builtin::kDataViewPrototypeSetBigUint64:
+      if (IsDataViewSetterSig(sig, wasm::kWasmI64)) {
+        return WellKnownImport::kDataViewSetBigUint64;
+      }
+      break;
+    case Builtin::kDataViewPrototypeSetFloat32:
+      if (IsDataViewSetterSig(sig, wasm::kWasmF32)) {
+        return WellKnownImport::kDataViewSetFloat32;
+      }
+      break;
+    case Builtin::kDataViewPrototypeSetFloat64:
+      if (IsDataViewSetterSig(sig, wasm::kWasmF64)) {
+        return WellKnownImport::kDataViewSetFloat64;
+      }
+      break;
+    case Builtin::kDataViewPrototypeSetInt8:
+      if (sig->parameter_count() == 3 && sig->return_count() == 0 &&
+          sig->GetParam(0) == wasm::kWasmExternRef &&
+          sig->GetParam(1) == wasm::kWasmI32 &&
+          sig->GetParam(2) == wasm::kWasmI32) {
+        return WellKnownImport::kDataViewSetInt8;
+      }
+      break;
+    case Builtin::kDataViewPrototypeSetInt16:
+      if (IsDataViewSetterSig(sig, wasm::kWasmI32)) {
+        return WellKnownImport::kDataViewSetInt16;
+      }
+      break;
+    case Builtin::kDataViewPrototypeSetInt32:
+      if (IsDataViewSetterSig(sig, wasm::kWasmI32)) {
+        return WellKnownImport::kDataViewSetInt32;
+      }
+      break;
+    case Builtin::kDataViewPrototypeSetUint8:
+      if (sig->parameter_count() == 3 && sig->return_count() == 0 &&
+          sig->GetParam(0) == wasm::kWasmExternRef &&
+          sig->GetParam(1) == wasm::kWasmI32 &&
+          sig->GetParam(2) == wasm::kWasmI32) {
+        return WellKnownImport::kDataViewSetUint8;
+      }
+      break;
+    case Builtin::kDataViewPrototypeSetUint16:
+      if (IsDataViewSetterSig(sig, wasm::kWasmI32)) {
+        return WellKnownImport::kDataViewSetUint16;
+      }
+      break;
+    case Builtin::kDataViewPrototypeSetUint32:
+      if (IsDataViewSetterSig(sig, wasm::kWasmI32)) {
+        return WellKnownImport::kDataViewSetUint32;
+      }
+      break;
+    case Builtin::kDataViewPrototypeGetByteLength:
+      if (sig->parameter_count() == 1 && sig->return_count() == 1 &&
+          sig->GetParam(0) == wasm::kWasmExternRef &&
+          sig->GetReturn(0) == kWasmF64) {
+        return WellKnownImport::kDataViewByteLength;
       }
       break;
     case Builtin::kNumberPrototypeToString:
@@ -528,8 +686,15 @@ WellKnownImport CheckForWellKnownImport(Handle<WasmInstanceObject> instance,
       if (sig->parameter_count() == 3 && sig->return_count() == 1 &&
           IsStringRef(sig->GetParam(0)) && IsStringRef(sig->GetParam(1)) &&
           sig->GetParam(2) == wasm::kWasmI32 &&
-          sig->GetReturn(0) == wasm::kWasmI32)
+          sig->GetReturn(0) == wasm::kWasmI32) {
         return WellKnownImport::kStringIndexOf;
+      } else if (sig->parameter_count() == 3 && sig->return_count() == 1 &&
+                 sig->GetParam(0) == wasm::kWasmExternRef &&
+                 sig->GetParam(1) == wasm::kWasmExternRef &&
+                 sig->GetParam(2) == wasm::kWasmI32 &&
+                 sig->GetReturn(0) == wasm::kWasmI32) {
+        return WellKnownImport::kStringIndexOfImported;
+      }
       break;
     default:
       break;
@@ -596,6 +761,9 @@ ImportCallKind WasmImportData::ComputeKind(
   }
   well_known_status_ =
       CheckForWellKnownImport(instance, func_index, callable_, expected_sig);
+  if (well_known_status_ == WellKnownImport::kLinkError) {
+    return ImportCallKind::kLinkError;
+  }
   // For JavaScript calls, determine whether the target has an arity match.
   if (IsJSFunction(*callable_)) {
     Handle<JSFunction> function = Handle<JSFunction>::cast(callable_);
@@ -661,14 +829,6 @@ ImportCallKind WasmImportData::ComputeKind(
     if (shared->internal_formal_parameter_count_without_receiver() ==
         expected_sig->parameter_count() - suspend_) {
       return ImportCallKind::kJSFunctionArityMatch;
-    }
-
-    // If function isn't compiled, compile it now.
-    Isolate* isolate = callable_->GetIsolate();
-    IsCompiledScope is_compiled_scope(shared->is_compiled_scope(isolate));
-    if (!is_compiled_scope.is_compiled()) {
-      Compiler::Compile(isolate, function, Compiler::CLEAR_EXCEPTION,
-                        &is_compiled_scope);
     }
 
     return ImportCallKind::kJSFunctionArityMismatch;
@@ -947,7 +1107,7 @@ MaybeHandle<WasmInstanceObject> InstantiateToInstanceObject(
       return instance;
     }
   }
-  DCHECK(isolate->has_pending_exception() || thrower->error());
+  DCHECK(isolate->has_exception() || thrower->error());
   return {};
 }
 
@@ -1054,7 +1214,7 @@ MaybeHandle<WasmInstanceObject> InstanceBuilder::Build() {
       } else if (AllocateMemory(memory_index).ToHandle(&memory_object)) {
         memory_objects->set(memory_index, *memory_object);
       } else {
-        DCHECK(isolate_->has_pending_exception() || thrower_->error());
+        DCHECK(isolate_->has_exception() || thrower_->error());
         return {};
       }
       WasmMemoryObject::UseInInstance(isolate_, memory_object, instance,
@@ -1314,7 +1474,7 @@ MaybeHandle<WasmInstanceObject> InstanceBuilder::Build() {
     }
   }
 
-  DCHECK(!isolate_->has_pending_exception());
+  DCHECK(!isolate_->has_exception());
   TRACE("Successfully built instance for module %p\n",
         module_object_->native_module());
   wasm_module_instantiated.success = true;
@@ -1351,7 +1511,7 @@ bool InstanceBuilder::ExecuteStartFunction() {
   hsi->LeaveContext();
 
   if (retval.is_null()) {
-    DCHECK(isolate_->has_pending_exception());
+    DCHECK(isolate_->has_exception());
     return false;
   }
   return true;
@@ -1404,7 +1564,7 @@ bool HasDefaultToNumberBehaviour(Isolate* isolate,
   Handle<Object> value_of = value_of_it.GetDataValue();
   if (!IsJSFunction(*value_of)) return false;
   Builtin value_of_builtin_id =
-      Handle<JSFunction>::cast(value_of)->code()->builtin_id();
+      Handle<JSFunction>::cast(value_of)->code(isolate)->builtin_id();
   if (value_of_builtin_id != Builtin::kObjectPrototypeValueOf) return false;
 
   // The {toString} member must be the default "FunctionPrototypeToString".
@@ -1414,7 +1574,7 @@ bool HasDefaultToNumberBehaviour(Isolate* isolate,
   Handle<Object> to_string = to_string_it.GetDataValue();
   if (!IsJSFunction(*to_string)) return false;
   Builtin to_string_builtin_id =
-      Handle<JSFunction>::cast(to_string)->code()->builtin_id();
+      Handle<JSFunction>::cast(to_string)->code(isolate)->builtin_id();
   if (to_string_builtin_id != Builtin::kFunctionPrototypeToString) return false;
 
   // Just a default function, which will convert to "Nan". Accept this.
@@ -1671,9 +1831,9 @@ bool InstanceBuilder::ProcessImportedFunction(
     }
     default: {
       // The imported function is a callable.
-      if (UseGenericWasmToJSWrapper(kind, expected_sig, resolved.suspend()) &&
-          (kind == ImportCallKind::kJSFunctionArityMatch ||
-           kind == ImportCallKind::kJSFunctionArityMismatch)) {
+      if (UseGenericWasmToJSWrapper(kind, expected_sig, resolved.suspend())) {
+        DCHECK(kind == ImportCallKind::kJSFunctionArityMatch ||
+               kind == ImportCallKind::kJSFunctionArityMismatch);
         ImportedFunctionEntry entry(instance, func_index);
         entry.SetWasmToJs(isolate_, js_receiver, resolved.suspend(),
                           expected_sig);
@@ -2349,16 +2509,26 @@ void InstanceBuilder::ProcessExports(Handle<WasmInstanceObject> instance) {
   }
   instance->set_exports_object(*exports_object);
 
+  // Switch the exports object to dictionary mode and allocate enough storage
+  // for the expected number of exports.
+  DCHECK(exports_object->HasFastProperties());
+  JSObject::NormalizeProperties(
+      isolate_, exports_object, KEEP_INOBJECT_PROPERTIES,
+      static_cast<int>(module_->export_table.size()), "WasmExportsObject");
+
   PropertyDescriptor desc;
   desc.set_writable(is_asm_js);
   desc.set_enumerable(true);
   desc.set_configurable(is_asm_js);
 
+  const PropertyDetails details{PropertyKind::kData, desc.ToAttributes(),
+                                PropertyConstness::kMutable};
+
   // Process each export in the export table.
   for (const WasmExport& exp : module_->export_table) {
     Handle<String> name = WasmModuleObject::ExtractUtf8StringFromModuleBytes(
         isolate_, module_object_, exp.name, kInternalize);
-    Handle<JSObject> export_to = exports_object;
+    Handle<Object> value;
     switch (exp.kind) {
       case kExternalFunction: {
         // Wrap and export the code as a JSFunction.
@@ -2367,24 +2537,28 @@ void InstanceBuilder::ProcessExports(Handle<WasmInstanceObject> instance) {
                 isolate_, instance, exp.index);
         Handle<JSFunction> wasm_external_function =
             WasmInternalFunction::GetOrCreateExternal(internal);
-        desc.set_value(wasm_external_function);
+        value = wasm_external_function;
 
         if (is_asm_js &&
             String::Equals(isolate_, name,
                            single_function_name.ToHandleChecked())) {
-          export_to = instance;
+          desc.set_value(value);
+          CHECK(JSReceiver::DefineOwnProperty(isolate_, instance, name, &desc,
+                                              Just(kThrowOnError))
+                    .FromMaybe(false));
+          continue;
         }
         break;
       }
       case kExternalTable: {
-        desc.set_value(handle(instance->tables()->get(exp.index), isolate_));
+        value = handle(instance->tables()->get(exp.index), isolate_);
         break;
       }
       case kExternalMemory: {
         // Export the memory as a WebAssembly.Memory object. A WasmMemoryObject
         // should already be available if the module has memory, since we always
         // create or import it when building an WasmInstanceObject.
-        desc.set_value(handle(instance->memory_object(exp.index), isolate_));
+        value = handle(instance->memory_object(exp.index), isolate_);
         break;
       }
       case kExternalGlobal: {
@@ -2392,7 +2566,7 @@ void InstanceBuilder::ProcessExports(Handle<WasmInstanceObject> instance) {
         if (global.imported) {
           auto cached_global = imported_globals.find(exp.index);
           if (cached_global != imported_globals.end()) {
-            desc.set_value(cached_global->second);
+            value = cached_global->second;
             break;
           }
         }
@@ -2442,7 +2616,7 @@ void InstanceBuilder::ProcessExports(Handle<WasmInstanceObject> instance) {
                                   tagged_buffer, global.type, offset,
                                   global.mutability)
                 .ToHandleChecked();
-        desc.set_value(global_obj);
+        value = global_obj;
         break;
       }
       case kExternalTag: {
@@ -2458,17 +2632,26 @@ void InstanceBuilder::ProcessExports(Handle<WasmInstanceObject> instance) {
                                        tag_object);
           tags_wrappers_[exp.index] = wrapper;
         }
-        desc.set_value(wrapper);
+        value = wrapper;
         break;
       }
       default:
         UNREACHABLE();
     }
 
-    CHECK(JSReceiver::DefineOwnProperty(isolate_, export_to, name, &desc,
-                                        Just(kThrowOnError))
-              .FromMaybe(false));
+    uint32_t index;
+    if (V8_UNLIKELY(name->AsArrayIndex(&index))) {
+      // Add a data element.
+      JSObject::AddDataElement(exports_object, index, value,
+                               details.attributes());
+    } else {
+      // Add a property to the dictionary.
+      JSObject::SetNormalizedProperty(exports_object, name, value, details);
+    }
   }
+
+  // Switch back to fast properties if possible.
+  JSObject::MigrateSlowToFast(exports_object, 0, "WasmExportsObjectFinished");
 
   if (module_->origin == kWasmOrigin) {
     CHECK(JSReceiver::SetIntegrityLevel(isolate_, exports_object, FROZEN,

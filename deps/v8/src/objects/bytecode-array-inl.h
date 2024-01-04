@@ -18,10 +18,13 @@ namespace v8 {
 namespace internal {
 
 CAST_ACCESSOR(BytecodeArray)
-OBJECT_CONSTRUCTORS_IMPL(BytecodeArray, FixedArrayBase)
+OBJECT_CONSTRUCTORS_IMPL(BytecodeArray, ExposedTrustedObject)
 
+SMI_ACCESSORS(BytecodeArray, length, kLengthOffset)
+RELEASE_ACQUIRE_SMI_ACCESSORS(BytecodeArray, length, kLengthOffset)
 ACCESSORS(BytecodeArray, constant_pool, Tagged<FixedArray>, kConstantPoolOffset)
 ACCESSORS(BytecodeArray, handler_table, Tagged<ByteArray>, kHandlerTableOffset)
+ACCESSORS(BytecodeArray, wrapper, Tagged<BytecodeWrapper>, kWrapperOffset)
 RELEASE_ACQUIRE_ACCESSORS(BytecodeArray, source_position_table,
                           Tagged<HeapObject>, kSourcePositionTableOffset)
 
@@ -166,6 +169,17 @@ DEF_GETTER(BytecodeArray, SizeIncludingMetadata, int) {
     size += ByteArray::cast(maybe_table)->AllocatedSize();
   }
   return size;
+}
+
+CAST_ACCESSOR(BytecodeWrapper)
+OBJECT_CONSTRUCTORS_IMPL(BytecodeWrapper, Struct)
+
+TRUSTED_POINTER_ACCESSORS(BytecodeWrapper, bytecode, BytecodeArray,
+                          kBytecodeOffset, kBytecodeArrayIndirectPointerTag)
+
+void BytecodeWrapper::clear_padding() {
+  WriteField<int32_t>(kPadding1Offset, 0);
+  WriteField<int32_t>(kPadding2Offset, 0);
 }
 
 }  // namespace internal

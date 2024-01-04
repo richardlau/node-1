@@ -350,10 +350,6 @@ class RuntimeCallTimer final {
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, JSWasmInlining)                    \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, JSWasmLowering)                    \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, JumpThreading)                     \
-  ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, MidTierPopulateReferenceMaps)      \
-  ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, MidTierRegisterAllocator)          \
-  ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, MidTierRegisterOutputDefinition)   \
-  ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, MidTierSpillSlotAllocator)         \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, LateOptimization)                  \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, LoadElimination)                   \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, LocateSpillSlots)                  \
@@ -385,10 +381,12 @@ class RuntimeCallTimer final {
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftInstructionSelection)    \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftInt64Lowering)           \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftLateOptimization)        \
+  ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftLoopPeeling)             \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftLoopUnrolling)           \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftMachineLowering)         \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftOptimize)                \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftRecreateSchedule)        \
+  ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftSimplifiedLowering)      \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftSpecialRPOScheduling)    \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftStoreStoreElim)          \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftTagUntagLowering)        \
@@ -397,6 +395,7 @@ class RuntimeCallTimer final {
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftWasmDeadCodeElimination) \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftWasmGCOptimize)          \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftWasmOptimize)            \
+  ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TurboshaftWasmLowering)            \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TypeAssertions)                    \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, TypedLowering)                     \
   ADD_THREAD_SPECIFIC_COUNTER(V, Optimize, Typer)                             \
