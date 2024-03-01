@@ -307,6 +307,8 @@ enum llparse_state_e {
   s_n_llhttp__internal__n_invoke_is_equal_content_length,
   s_n_llhttp__internal__n_chunk_size_almost_done,
   s_n_llhttp__internal__n_chunk_parameters,
+  s_n_llhttp__internal__n_span_start_llhttp__on_chunk_parameters,
+  s_n_llhttp__internal__n_chunk_parameters_ows,
   s_n_llhttp__internal__n_chunk_size_otherwise,
   s_n_llhttp__internal__n_chunk_size,
   s_n_llhttp__internal__n_chunk_size_digit,
@@ -479,6 +481,10 @@ int llhttp__on_header_value(
     const unsigned char* endp);
 
 int llhttp__on_body(
+    llhttp__internal_t* s, const unsigned char* p,
+    const unsigned char* endp);
+
+int llhttp__on_chunk_parameters(
     llhttp__internal_t* s, const unsigned char* p,
     const unsigned char* endp);
 
@@ -1118,11 +1124,38 @@ static llparse_state_t llhttp__internal__run(
           goto s_n_llhttp__internal__n_chunk_parameters;
         }
         case 2: {
-          p++;
-          goto s_n_llhttp__internal__n_chunk_size_almost_done;
+          goto s_n_llhttp__internal__n_span_end_llhttp__on_chunk_parameters;
         }
         default: {
           goto s_n_llhttp__internal__n_error_10;
+        }
+      }
+      /* UNREACHABLE */;
+      abort();
+    }
+    case s_n_llhttp__internal__n_span_start_llhttp__on_chunk_parameters:
+    s_n_llhttp__internal__n_span_start_llhttp__on_chunk_parameters: {
+      if (p == endp) {
+        return s_n_llhttp__internal__n_span_start_llhttp__on_chunk_parameters;
+      }
+      state->_span_pos0 = (void*) p;
+      state->_span_cb0 = llhttp__on_chunk_parameters;
+      goto s_n_llhttp__internal__n_chunk_parameters;
+      /* UNREACHABLE */;
+      abort();
+    }
+    case s_n_llhttp__internal__n_chunk_parameters_ows:
+    s_n_llhttp__internal__n_chunk_parameters_ows: {
+      if (p == endp) {
+        return s_n_llhttp__internal__n_chunk_parameters_ows;
+      }
+      switch (*p) {
+        case ' ': {
+          p++;
+          goto s_n_llhttp__internal__n_chunk_parameters_ows;
+        }
+        default: {
+          goto s_n_llhttp__internal__n_span_start_llhttp__on_chunk_parameters;
         }
       }
       /* UNREACHABLE */;
@@ -1138,13 +1171,9 @@ static llparse_state_t llhttp__internal__run(
           p++;
           goto s_n_llhttp__internal__n_chunk_size_almost_done;
         }
-        case ' ': {
-          p++;
-          goto s_n_llhttp__internal__n_chunk_parameters;
-        }
         case ';': {
           p++;
-          goto s_n_llhttp__internal__n_chunk_parameters;
+          goto s_n_llhttp__internal__n_chunk_parameters_ows;
         }
         default: {
           goto s_n_llhttp__internal__n_error_11;
@@ -5449,6 +5478,24 @@ static llparse_state_t llhttp__internal__run(
     /* UNREACHABLE */;
     abort();
   }
+  s_n_llhttp__internal__n_span_end_llhttp__on_chunk_parameters: {
+    const unsigned char* start;
+    int err;
+    
+    start = state->_span_pos0;
+    state->_span_pos0 = NULL;
+    err = llhttp__on_chunk_parameters(state, start, p);
+    if (err != 0) {
+      state->error = err;
+      state->error_pos = (const char*) (p + 1);
+      state->_current = (void*) (intptr_t) s_n_llhttp__internal__n_chunk_size_almost_done;
+      return s_error;
+    }
+    p++;
+    goto s_n_llhttp__internal__n_chunk_size_almost_done;
+    /* UNREACHABLE */;
+    abort();
+  }
   s_n_llhttp__internal__n_error_10: {
     state->error = 0x2;
     state->reason = "Invalid character in chunk parameters";
@@ -7405,6 +7452,8 @@ enum llparse_state_e {
   s_n_llhttp__internal__n_invoke_is_equal_content_length,
   s_n_llhttp__internal__n_chunk_size_almost_done,
   s_n_llhttp__internal__n_chunk_parameters,
+  s_n_llhttp__internal__n_span_start_llhttp__on_chunk_parameters,
+  s_n_llhttp__internal__n_chunk_parameters_ows,
   s_n_llhttp__internal__n_chunk_size_otherwise,
   s_n_llhttp__internal__n_chunk_size,
   s_n_llhttp__internal__n_chunk_size_digit,
@@ -7572,6 +7621,10 @@ int llhttp__on_header_value(
     const unsigned char* endp);
 
 int llhttp__on_body(
+    llhttp__internal_t* s, const unsigned char* p,
+    const unsigned char* endp);
+
+int llhttp__on_chunk_parameters(
     llhttp__internal_t* s, const unsigned char* p,
     const unsigned char* endp);
 
@@ -8176,11 +8229,38 @@ static llparse_state_t llhttp__internal__run(
           goto s_n_llhttp__internal__n_chunk_parameters;
         }
         case 2: {
-          p++;
-          goto s_n_llhttp__internal__n_chunk_size_almost_done;
+          goto s_n_llhttp__internal__n_span_end_llhttp__on_chunk_parameters;
         }
         default: {
           goto s_n_llhttp__internal__n_error_6;
+        }
+      }
+      /* UNREACHABLE */;
+      abort();
+    }
+    case s_n_llhttp__internal__n_span_start_llhttp__on_chunk_parameters:
+    s_n_llhttp__internal__n_span_start_llhttp__on_chunk_parameters: {
+      if (p == endp) {
+        return s_n_llhttp__internal__n_span_start_llhttp__on_chunk_parameters;
+      }
+      state->_span_pos0 = (void*) p;
+      state->_span_cb0 = llhttp__on_chunk_parameters;
+      goto s_n_llhttp__internal__n_chunk_parameters;
+      /* UNREACHABLE */;
+      abort();
+    }
+    case s_n_llhttp__internal__n_chunk_parameters_ows:
+    s_n_llhttp__internal__n_chunk_parameters_ows: {
+      if (p == endp) {
+        return s_n_llhttp__internal__n_chunk_parameters_ows;
+      }
+      switch (*p) {
+        case ' ': {
+          p++;
+          goto s_n_llhttp__internal__n_chunk_parameters_ows;
+        }
+        default: {
+          goto s_n_llhttp__internal__n_span_start_llhttp__on_chunk_parameters;
         }
       }
       /* UNREACHABLE */;
@@ -8196,13 +8276,9 @@ static llparse_state_t llhttp__internal__run(
           p++;
           goto s_n_llhttp__internal__n_chunk_size_almost_done;
         }
-        case ' ': {
-          p++;
-          goto s_n_llhttp__internal__n_chunk_parameters;
-        }
         case ';': {
           p++;
-          goto s_n_llhttp__internal__n_chunk_parameters;
+          goto s_n_llhttp__internal__n_chunk_parameters_ows;
         }
         default: {
           goto s_n_llhttp__internal__n_error_7;
@@ -12293,6 +12369,24 @@ static llparse_state_t llhttp__internal__run(
       default:
         goto s_n_llhttp__internal__n_error_4;
     }
+    /* UNREACHABLE */;
+    abort();
+  }
+  s_n_llhttp__internal__n_span_end_llhttp__on_chunk_parameters: {
+    const unsigned char* start;
+    int err;
+    
+    start = state->_span_pos0;
+    state->_span_pos0 = NULL;
+    err = llhttp__on_chunk_parameters(state, start, p);
+    if (err != 0) {
+      state->error = err;
+      state->error_pos = (const char*) (p + 1);
+      state->_current = (void*) (intptr_t) s_n_llhttp__internal__n_chunk_size_almost_done;
+      return s_error;
+    }
+    p++;
+    goto s_n_llhttp__internal__n_chunk_size_almost_done;
     /* UNREACHABLE */;
     abort();
   }

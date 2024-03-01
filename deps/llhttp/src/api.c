@@ -15,6 +15,21 @@
     err = settings->NAME(__VA_ARGS__);                                        \
   } while (0)
 
+#define SPAN_CALLBACK_MAYBE(PARSER, NAME, START, LEN)                         \
+  do {                                                                        \
+    const llhttp_settings_t* settings;                                        \
+    settings = (const llhttp_settings_t*) (PARSER)->settings;                 \
+    if (settings == NULL || settings->NAME == NULL) {                         \
+      err = 0;                                                                \
+      break;                                                                  \
+    }                                                                         \
+    err = settings->NAME((PARSER), (START), (LEN));                           \
+    if (err == -1) {                                                          \
+      err = HPE_USER;                                                         \
+      llhttp_set_error_reason((PARSER), "Span callback error in " #NAME);     \
+    }                                                                         \
+  } while (0)
+
 void llhttp_init(llhttp_t* parser, llhttp_type_t type,
                  const llhttp_settings_t* settings) {
   llhttp__internal_init(parser);
@@ -198,6 +213,13 @@ int llhttp__on_body(llhttp_t* s, const char* p, const char* endp) {
 int llhttp__on_chunk_header(llhttp_t* s, const char* p, const char* endp) {
   int err;
   CALLBACK_MAYBE(s, on_chunk_header, s);
+  return err;
+}
+
+
+int llhttp__on_chunk_parameters(llhttp_t* s, const char* p, const char* endp) {
+  int err;
+  SPAN_CALLBACK_MAYBE(s, on_chunk_parameters, p, endp - p);
   return err;
 }
 
