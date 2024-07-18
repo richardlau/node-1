@@ -271,6 +271,7 @@
           'ldflags': [
             '-Wl,-bE:<(exp_filename)',
             '-Wl,-brtl',
+            '-Wl,-bnoquiet',
           ],
         }],
       ],
