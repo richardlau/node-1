@@ -27,6 +27,7 @@ GCLIENT_SOLUTION = [
       # These deps are already part of Node.js.
       "v8/base/trace_event/common"            : None,
       # These deps are unnecessary for building.
+      "linux64-format"                        : None,
       "v8/test/benchmarks/data"               : None,
       "v8/testing/gmock"                      : None,
       "v8/test/mozilla/data"                  : None,
@@ -42,6 +43,11 @@ GCLIENT_SOLUTION = [
       "v8/tools/swarming_client"              : None,
       "v8/third_party/qemu-linux-x64"         : None,
     },
+    "custom_hooks" : [
+      {
+        "name" : "clang_format_linux",
+      },
+    ],
   },
 ]
 
