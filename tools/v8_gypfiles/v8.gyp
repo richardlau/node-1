@@ -1043,7 +1043,7 @@
     {
       'target_name': 'v8_base_without_compiler',
       'type': 'static_library',
-      'toolsets': ['host', 'target'],
+      'toolsets': ['target'],
       'dependencies': [
         'torque_generated_definitions',
         'v8_bigint',
