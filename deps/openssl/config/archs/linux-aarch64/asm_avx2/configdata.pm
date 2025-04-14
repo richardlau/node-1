@@ -18,6 +18,7 @@ our %config = (
     "ARFLAGS" => [
         "qc"
     ],
+    "ASFLAGS" => [],
     "CC" => "../config/fake_gcc.pl",
     "CFLAGS" => [
         "-Wall -O3"
@@ -30,14 +31,16 @@ our %config = (
         "-Wall -O3"
     ],
     "FIPSKEY" => "f4556650ac31d35461610bac4ed81b1a181b2d8a43ea2854cbae22ca74560813",
+    "FIPS_VENDOR" => "OpenSSL FIPS Provider",
     "HASHBANGPERL" => "/usr/bin/env perl",
     "LDFLAGS" => [],
     "LDLIBS" => [],
+    "OBJCOPY" => "objcopy",
     "PERL" => "/usr/bin/perl",
     "RANLIB" => "ranlib",
     "RC" => "windres",
     "RCFLAGS" => [],
-    "api" => "30000",
+    "api" => "30500",
     "b32" => "0",
     "b64" => "0",
     "b64l" => "1",
@@ -59,11 +62,13 @@ our %config = (
         "doc/build.info",
         "test/build.info",
         "engines/build.info",
+        "exporters/build.info",
         "crypto/objects/build.info",
         "crypto/buffer/build.info",
         "crypto/bio/build.info",
         "crypto/stack/build.info",
         "crypto/lhash/build.info",
+        "crypto/hashtable/build.info",
         "crypto/rand/build.info",
         "crypto/evp/build.info",
         "crypto/asn1/build.info",
@@ -81,6 +86,7 @@ our %config = (
         "crypto/md5/build.info",
         "crypto/sha/build.info",
         "crypto/mdc2/build.info",
+        "crypto/ml_kem/build.info",
         "crypto/hmac/build.info",
         "crypto/ripemd/build.info",
         "crypto/whrlpool/build.info",
@@ -122,11 +128,19 @@ our %config = (
         "crypto/cmp/build.info",
         "crypto/encode_decode/build.info",
         "crypto/ffc/build.info",
+        "crypto/hpke/build.info",
+        "crypto/thread/build.info",
+        "crypto/ml_dsa/build.info",
+        "crypto/slh_dsa/build.info",
+        "ssl/record/build.info",
+        "ssl/rio/build.info",
+        "ssl/quic/build.info",
         "apps/lib/build.info",
         "providers/common/build.info",
         "providers/implementations/build.info",
         "providers/fips/build.info",
         "doc/man1/build.info",
+        "ssl/record/methods/build.info",
         "providers/common/der/build.info",
         "providers/implementations/digests/build.info",
         "providers/implementations/ciphers/build.info",
@@ -140,6 +154,7 @@ our %config = (
         "providers/implementations/encode_decode/build.info",
         "providers/implementations/storemgmt/build.info",
         "providers/implementations/kem/build.info",
+        "providers/implementations/skeymgmt/build.info",
         "providers/implementations/rands/seeding/build.info"
     ],
     "build_metadata" => "",
@@ -159,7 +174,7 @@ our %config = (
     ],
     "dynamic_engines" => "0",
     "ex_libs" => [],
-    "full_version" => "3.0.16",
+    "full_version" => "3.5.0",
     "includes" => [],
     "lflags" => [],
     "lib_defines" => [
@@ -168,37 +183,52 @@ our %config = (
     "libdir" => "",
     "major" => "3",
     "makedep_scheme" => "gcc",
-    "minor" => "0",
+    "minor" => "5",
     "openssl_api_defines" => [
-        "OPENSSL_CONFIGURED_API=30000"
+        "OPENSSL_CONFIGURED_API=30500"
     ],
     "openssl_feature_defines" => [
         "OPENSSL_RAND_SEED_OS",
         "OPENSSL_THREADS",
         "OPENSSL_NO_AFALGENG",
         "OPENSSL_NO_ASAN",
+        "OPENSSL_NO_BROTLI",
+        "OPENSSL_NO_BROTLI_DYNAMIC",
         "OPENSSL_NO_COMP",
         "OPENSSL_NO_CRYPTO_MDEBUG",
         "OPENSSL_NO_CRYPTO_MDEBUG_BACKTRACE",
+        "OPENSSL_NO_DEMOS",
         "OPENSSL_NO_DEVCRYPTOENG",
         "OPENSSL_NO_EC_NISTP_64_GCC_128",
         "OPENSSL_NO_EGD",
         "OPENSSL_NO_EXTERNAL_TESTS",
+        "OPENSSL_NO_FIPS_JITTER",
         "OPENSSL_NO_FUZZ_AFL",
         "OPENSSL_NO_FUZZ_LIBFUZZER",
+        "OPENSSL_NO_H3DEMO",
+        "OPENSSL_NO_HQINTEROP",
+        "OPENSSL_NO_JITTER",
         "OPENSSL_NO_KTLS",
         "OPENSSL_NO_LOADERENG",
         "OPENSSL_NO_MD2",
         "OPENSSL_NO_MSAN",
+        "OPENSSL_NO_PIE",
         "OPENSSL_NO_RC5",
         "OPENSSL_NO_SCTP",
         "OPENSSL_NO_SSL3",
         "OPENSSL_NO_SSL3_METHOD",
+        "OPENSSL_NO_SSLKEYLOG",
+        "OPENSSL_NO_TFO",
         "OPENSSL_NO_TRACE",
         "OPENSSL_NO_UBSAN",
         "OPENSSL_NO_UNIT_TEST",
         "OPENSSL_NO_UPLINK",
         "OPENSSL_NO_WEAK_SSL_CIPHERS",
+        "OPENSSL_NO_WINSTORE",
+        "OPENSSL_NO_ZLIB",
+        "OPENSSL_NO_ZLIB_DYNAMIC",
+        "OPENSSL_NO_ZSTD",
+        "OPENSSL_NO_ZSTD_DYNAMIC",
         "OPENSSL_NO_DYNAMIC_ENGINE"
     ],
     "openssl_other_defines" => [
@@ -206,11 +236,11 @@ our %config = (
     ],
     "openssl_sys_defines" => [],
     "openssldir" => "",
-    "options" => "enable-ssl-trace enable-fips no-afalgeng no-asan no-buildtest-c++ no-comp no-crypto-mdebug no-crypto-mdebug-backtrace no-devcryptoeng no-dynamic-engine no-ec_nistp_64_gcc_128 no-egd no-external-tests no-fuzz-afl no-fuzz-libfuzzer no-ktls no-loadereng no-md2 no-msan no-rc5 no-sctp no-shared no-ssl3 no-ssl3-method no-trace no-ubsan no-unit-test no-uplink no-weak-ssl-ciphers no-zlib no-zlib-dynamic",
-    "patch" => "16",
+    "options" => "enable-ssl-trace enable-fips no-afalgeng no-asan no-brotli no-brotli-dynamic no-buildtest-c++ no-comp no-crypto-mdebug no-crypto-mdebug-backtrace no-demos no-devcryptoeng no-dynamic-engine no-ec_nistp_64_gcc_128 no-egd no-external-tests no-fips-jitter no-fuzz-afl no-fuzz-libfuzzer no-h3demo no-hqinterop no-jitter no-ktls no-loadereng no-md2 no-msan no-pie no-rc5 no-sctp no-shared no-ssl3 no-ssl3-method no-sslkeylog no-tfo no-trace no-ubsan no-unit-test no-uplink no-weak-ssl-ciphers no-winstore no-zlib no-zlib-dynamic no-zstd no-zstd-dynamic",
+    "patch" => "0",
     "perl_archname" => "x86_64-linux-gnu-thread-multi",
     "perl_cmd" => "/usr/bin/perl",
-    "perl_version" => "5.38.2",
+    "perl_version" => "5.30.0",
     "perlargv" => [
         "no-comp",
         "no-shared",
@@ -240,6 +270,7 @@ our %config = (
         "LDLIBS" => undef,
         "MT" => undef,
         "MTFLAGS" => undef,
+        "OBJCOPY" => undef,
         "OPENSSL_LOCAL_CONFIG_DIR" => undef,
         "PERL" => undef,
         "RANLIB" => undef,
@@ -259,11 +290,11 @@ our %config = (
     "prerelease" => "",
     "processor" => "",
     "rc4_int" => "unsigned char",
-    "release_date" => "11 Feb 2025",
+    "release_date" => "8 Apr 2025",
     "shlib_version" => "3",
     "sourcedir" => ".",
     "target" => "linux-aarch64",
-    "version" => "3.0.16"
+    "version" => "3.5.0"
 );
 our %target = (
     "AR" => "ar",
@@ -273,6 +304,7 @@ our %target = (
     "CXX" => "g++",
     "CXXFLAGS" => "-Wall -O3",
     "HASHBANGPERL" => "/usr/bin/env perl",
+    "OBJCOPY" => "objcopy",
     "RANLIB" => "ranlib",
     "RC" => "windres",
     "_conf_fname_int" => [
@@ -284,6 +316,8 @@ our %target = (
         "Configurations/shared-info.pl"
     ],
     "asm_arch" => "aarch64",
+    "bin_cflags" => "",
+    "bin_lflags" => "",
     "bn_ops" => "SIXTY_FOUR_BIT_LONG RC4_CHAR",
     "build_file" => "Makefile",
     "build_scheme" => [
@@ -328,6 +362,8 @@ our %target = (
 our @disablables = (
     "acvp-tests",
     "afalgeng",
+    "apps",
+    "argon2",
     "aria",
     "asan",
     "asm",
@@ -338,11 +374,14 @@ our @disablables = (
     "autoload-config",
     "bf",
     "blake2",
+    "brotli",
+    "brotli-dynamic",
     "buildtest-c++",
     "bulk",
     "cached-fetch",
     "camellia",
     "capieng",
+    "winstore",
     "cast",
     "chacha",
     "cmac",
@@ -351,11 +390,16 @@ our @disablables = (
     "comp",
     "crypto-mdebug",
     "ct",
+    "default-thread-pool",
+    "demos",
+    "h3demo",
+    "hqinterop",
     "deprecated",
     "des",
     "devcryptoeng",
     "dgram",
     "dh",
+    "docs",
     "dsa",
     "dso",
     "dtls",
@@ -365,6 +409,7 @@ our @disablables = (
     "ec_nistp_64_gcc_128",
     "ecdh",
     "ecdsa",
+    "ecx",
     "egd",
     "engine",
     "err",
@@ -372,10 +417,15 @@ our @disablables = (
     "filenames",
     "fips",
     "fips-securitychecks",
+    "fips-post",
+    "fips-jitter",
     "fuzz-afl",
     "fuzz-libfuzzer",
     "gost",
+    "http",
     "idea",
+    "integrity-only-ciphers",
+    "jitter",
     "ktls",
     "legacy",
     "loadereng",
@@ -383,6 +433,8 @@ our @disablables = (
     "md2",
     "md4",
     "mdc2",
+    "ml-dsa",
+    "ml-kem",
     "module",
     "msan",
     "multiblock",
@@ -391,10 +443,13 @@ our @disablables = (
     "ocsp",
     "padlockeng",
     "pic",
+    "pie",
     "pinshared",
     "poly1305",
     "posix-io",
     "psk",
+    "quic",
+    "unstable-qlog",
     "rc2",
     "rc4",
     "rc5",
@@ -408,7 +463,9 @@ our @disablables = (
     "shared",
     "siphash",
     "siv",
+    "slh-dsa",
     "sm2",
+    "sm2-precomp",
     "sm3",
     "sm4",
     "sock",
@@ -419,9 +476,13 @@ our @disablables = (
     "ssl-trace",
     "static-engine",
     "stdio",
+    "sslkeylog",
     "tests",
+    "tfo",
+    "thread-pool",
     "threads",
     "tls",
+    "tls-deprecated-ec",
     "trace",
     "ts",
     "ubsan",
@@ -432,6 +493,8 @@ our @disablables = (
     "whirlpool",
     "zlib",
     "zlib-dynamic",
+    "zstd",
+    "zstd-dynamic",
     "ssl3",
     "ssl3-method",
     "tls1",
@@ -452,33 +515,46 @@ our @disablables_int = (
 our %disabled = (
     "afalgeng" => "option",
     "asan" => "default",
+    "brotli" => "default",
+    "brotli-dynamic" => "default",
     "buildtest-c++" => "default",
     "comp" => "option",
     "crypto-mdebug" => "default",
     "crypto-mdebug-backtrace" => "default",
+    "demos" => "default",
     "devcryptoeng" => "default",
     "dynamic-engine" => "cascade",
     "ec_nistp_64_gcc_128" => "default",
     "egd" => "default",
     "external-tests" => "default",
+    "fips-jitter" => "default",
     "fuzz-afl" => "default",
     "fuzz-libfuzzer" => "default",
+    "h3demo" => "default",
+    "hqinterop" => "default",
+    "jitter" => "default",
     "ktls" => "default",
     "loadereng" => "cascade",
     "md2" => "default",
     "msan" => "default",
+    "pie" => "default",
     "rc5" => "default",
     "sctp" => "default",
     "shared" => "option",
     "ssl3" => "default",
     "ssl3-method" => "default",
+    "sslkeylog" => "default",
+    "tfo" => "default",
     "trace" => "default",
     "ubsan" => "default",
     "unit-test" => "default",
     "uplink" => "no uplink_arch",
     "weak-ssl-ciphers" => "default",
+    "winstore" => "not-windows",
     "zlib" => "default",
-    "zlib-dynamic" => "default"
+    "zlib-dynamic" => "default",
+    "zstd" => "default",
+    "zstd-dynamic" => "default"
 );
 our %withargs = ();
 our %unified_info = (
@@ -761,6 +837,21 @@ our %unified_info = (
             }
         },
         "generate" => {
+            "exporters/OpenSSLConfig.cmake" => {
+                "exporter" => "cmake"
+            },
+            "exporters/OpenSSLConfigVersion.cmake" => {
+                "exporter" => "cmake"
+            },
+            "exporters/libcrypto.pc" => {
+                "exporter" => "pkg-config"
+            },
+            "exporters/libssl.pc" => {
+                "exporter" => "pkg-config"
+            },
+            "exporters/openssl.pc" => {
+                "exporter" => "pkg-config"
+            },
             "include/openssl/configuration.h" => {
                 "skip" => "1"
             }
@@ -781,6 +872,9 @@ our %unified_info = (
             "providers/liblegacy.a" => {
                 "noinst" => "1"
             },
+            "providers/libtemplate.a" => {
+                "noinst" => "1"
+            },
             "test/libtestutil.a" => {
                 "has_main" => "1",
                 "noinst" => "1"
@@ -798,6 +892,9 @@ our %unified_info = (
             }
         },
         "programs" => {
+            "fuzz/acert-test" => {
+                "noinst" => "1"
+            },
             "fuzz/asn1-test" => {
                 "noinst" => "1"
             },
@@ -828,7 +925,58 @@ our %unified_info = (
             "fuzz/ct-test" => {
                 "noinst" => "1"
             },
+            "fuzz/decoder-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/dtlsclient-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/dtlsserver-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/hashtable-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/ml-dsa-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/ml-kem-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/pem-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/provider-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/punycode-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/quic-client-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/quic-lcidm-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/quic-rcidm-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/quic-server-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/quic-srtm-test" => {
+                "noinst" => "1"
+            },
             "fuzz/server-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/slh-dsa-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/smime-test" => {
+                "noinst" => "1"
+            },
+            "fuzz/v3name-test" => {
                 "noinst" => "1"
             },
             "fuzz/x509-test" => {
@@ -927,6 +1075,9 @@ our %unified_info = (
             "test/buildtest_c_buffer" => {
                 "noinst" => "1"
             },
+            "test/buildtest_c_byteorder" => {
+                "noinst" => "1"
+            },
             "test/buildtest_c_camellia" => {
                 "noinst" => "1"
             },
@@ -951,9 +1102,6 @@ our %unified_info = (
             "test/buildtest_c_core_dispatch" => {
                 "noinst" => "1"
             },
-            "test/buildtest_c_core_names" => {
-                "noinst" => "1"
-            },
             "test/buildtest_c_core_object" => {
                 "noinst" => "1"
             },
@@ -976,6 +1124,9 @@ our %unified_info = (
                 "noinst" => "1"
             },
             "test/buildtest_c_e_os2" => {
+                "noinst" => "1"
+            },
+            "test/buildtest_c_e_ostime" => {
                 "noinst" => "1"
             },
             "test/buildtest_c_ebcdic" => {
@@ -1005,10 +1156,16 @@ our %unified_info = (
             "test/buildtest_c_hmac" => {
                 "noinst" => "1"
             },
+            "test/buildtest_c_hpke" => {
+                "noinst" => "1"
+            },
             "test/buildtest_c_http" => {
                 "noinst" => "1"
             },
             "test/buildtest_c_idea" => {
+                "noinst" => "1"
+            },
+            "test/buildtest_c_indicator" => {
                 "noinst" => "1"
             },
             "test/buildtest_c_kdf" => {
@@ -1024,6 +1181,9 @@ our %unified_info = (
                 "noinst" => "1"
             },
             "test/buildtest_c_mdc2" => {
+                "noinst" => "1"
+            },
+            "test/buildtest_c_ml_kem" => {
                 "noinst" => "1"
             },
             "test/buildtest_c_modes" => {
@@ -1054,6 +1214,9 @@ our %unified_info = (
                 "noinst" => "1"
             },
             "test/buildtest_c_provider" => {
+                "noinst" => "1"
+            },
+            "test/buildtest_c_quic" => {
                 "noinst" => "1"
             },
             "test/buildtest_c_rand" => {
@@ -1096,6 +1259,9 @@ our %unified_info = (
                 "noinst" => "1"
             },
             "test/buildtest_c_symhacks" => {
+                "noinst" => "1"
+            },
+            "test/buildtest_c_thread" => {
                 "noinst" => "1"
             },
             "test/buildtest_c_tls1" => {
@@ -1601,15 +1767,21 @@ our %unified_info = (
     },
     "defines" => {
         "libcrypto" => [
+            "BSAES_ASM",
             "ECP_NISTZ256_ASM",
+            "ECP_SM2P256_ASM",
             "KECCAK1600_ASM",
+            "MD5_ASM",
             "OPENSSL_BN_ASM_MONT",
             "OPENSSL_CPUID_OBJ",
+            "OPENSSL_SM3_ASM",
             "POLY1305_ASM",
             "SHA1_ASM",
             "SHA256_ASM",
             "SHA512_ASM",
-            "VPAES_ASM"
+            "SM4_ASM",
+            "VPAES_ASM",
+            "VPSM4_ASM"
         ],
         "providers/fips" => [
             "FIPS_MODULE"
@@ -1619,16 +1791,22 @@ our %unified_info = (
             "OPENSSL_CPUID_OBJ"
         ],
         "providers/libdefault.a" => [
+            "BSAES_ASM",
             "ECP_NISTZ256_ASM",
+            "ECP_SM2P256_ASM",
             "KECCAK1600_ASM",
             "OPENSSL_CPUID_OBJ",
             "SHA1_ASM",
             "SHA256_ASM",
             "SHA512_ASM",
-            "VPAES_ASM"
+            "SM4_ASM",
+            "VPAES_ASM",
+            "VPSM4_ASM"
         ],
         "providers/libfips.a" => [
+            "BSAES_ASM",
             "ECP_NISTZ256_ASM",
+            "ECP_SM2P256_ASM",
             "FIPS_MODULE",
             "KECCAK1600_ASM",
             "OPENSSL_BN_ASM_MONT",
@@ -1636,7 +1814,12 @@ our %unified_info = (
             "SHA1_ASM",
             "SHA256_ASM",
             "SHA512_ASM",
-            "VPAES_ASM"
+            "SM4_ASM",
+            "VPAES_ASM",
+            "VPSM4_ASM"
+        ],
+        "providers/liblegacy.a" => [
+            "MD5_ASM"
         ],
         "test/evp_extra_test" => [
             "STATIC_LEGACY"
@@ -1650,14 +1833,21 @@ our %unified_info = (
     },
     "depends" => {
         "" => [
+            "OpenSSLConfigVersion.cmake",
+            "crypto/params_idx.c",
+            "exporters/OpenSSLConfigVersion.cmake",
+            "exporters/openssl.pc",
             "include/crypto/bn_conf.h",
             "include/crypto/dso_conf.h",
+            "include/internal/param_names.h",
             "include/openssl/asn1.h",
             "include/openssl/asn1t.h",
             "include/openssl/bio.h",
             "include/openssl/cmp.h",
             "include/openssl/cms.h",
+            "include/openssl/comp.h",
             "include/openssl/conf.h",
+            "include/openssl/core_names.h",
             "include/openssl/crmf.h",
             "include/openssl/crypto.h",
             "include/openssl/ct.h",
@@ -1674,9 +1864,18 @@ our %unified_info = (
             "include/openssl/ssl.h",
             "include/openssl/ui.h",
             "include/openssl/x509.h",
+            "include/openssl/x509_acert.h",
             "include/openssl/x509_vfy.h",
             "include/openssl/x509v3.h",
+            "openssl.pc",
             "test/provider_internal_test.cnf"
+        ],
+        "OpenSSLConfig.cmake" => [
+            "builddata.pm"
+        ],
+        "OpenSSLConfigVersion.cmake" => [
+            "OpenSSLConfig.cmake",
+            "builddata.pm"
         ],
         "apps/lib/cmp_client_test-bin-cmp_mock_srv.o" => [
             "apps/progs.h"
@@ -1823,6 +2022,9 @@ our %unified_info = (
         "apps/openssl-bin-sess_id.o" => [
             "apps/progs.h"
         ],
+        "apps/openssl-bin-skeyutl.o" => [
+            "apps/progs.h"
+        ],
         "apps/openssl-bin-smime.o" => [
             "apps/progs.h"
         ],
@@ -1910,6 +2112,9 @@ our %unified_info = (
         ],
         "crypto/libcrypto-lib-info.o" => [
             "crypto/buildinf.h"
+        ],
+        "crypto/params_idx.c" => [
+            "util/perl|OpenSSL/paramnames.pm"
         ],
         "crypto/rc4/rc4-586.S" => [
             "crypto/perlasm/x86asm.pl"
@@ -6929,6 +7134,27 @@ our %unified_info = (
         "doc/man7/openssl_user_macros.pod" => [
             "doc/man7/openssl_user_macros.pod.in"
         ],
+        "exporters/OpenSSLConfig.cmake" => [
+            "installdata.pm"
+        ],
+        "exporters/OpenSSLConfigVersion.cmake" => [
+            "exporters/OpenSSLConfig.cmake",
+            "installdata.pm"
+        ],
+        "exporters/libcrypto.pc" => [
+            "installdata.pm"
+        ],
+        "exporters/libssl.pc" => [
+            "installdata.pm"
+        ],
+        "exporters/openssl.pc" => [
+            "exporters/libcrypto.pc",
+            "exporters/libssl.pc",
+            "installdata.pm"
+        ],
+        "fuzz/acert-test" => [
+            "libcrypto"
+        ],
         "fuzz/asn1-test" => [
             "libcrypto",
             "libssl"
@@ -6961,16 +7187,84 @@ our %unified_info = (
         "fuzz/ct-test" => [
             "libcrypto"
         ],
+        "fuzz/decoder-test" => [
+            "libcrypto"
+        ],
+        "fuzz/dtlsclient-test" => [
+            "libcrypto",
+            "libssl"
+        ],
+        "fuzz/dtlsserver-test" => [
+            "libcrypto",
+            "libssl"
+        ],
+        "fuzz/hashtable-test" => [
+            "libcrypto.a"
+        ],
+        "fuzz/ml-dsa-test" => [
+            "libcrypto.a"
+        ],
+        "fuzz/ml-kem-test" => [
+            "libcrypto.a"
+        ],
+        "fuzz/pem-test" => [
+            "libcrypto.a"
+        ],
+        "fuzz/provider-test" => [
+            "libcrypto"
+        ],
+        "fuzz/punycode-test" => [
+            "libcrypto.a"
+        ],
+        "fuzz/quic-client-test" => [
+            "libcrypto.a",
+            "libssl.a"
+        ],
+        "fuzz/quic-lcidm-test" => [
+            "libcrypto.a",
+            "libssl.a"
+        ],
+        "fuzz/quic-rcidm-test" => [
+            "libcrypto.a",
+            "libssl.a"
+        ],
+        "fuzz/quic-server-test" => [
+            "libcrypto.a",
+            "libssl.a"
+        ],
+        "fuzz/quic-srtm-test" => [
+            "libcrypto.a",
+            "libssl.a"
+        ],
         "fuzz/server-test" => [
             "libcrypto",
             "libssl"
         ],
+        "fuzz/slh-dsa-test" => [
+            "libcrypto.a"
+        ],
+        "fuzz/smime-test" => [
+            "libcrypto",
+            "libssl"
+        ],
+        "fuzz/v3name-test" => [
+            "libcrypto.a"
+        ],
         "fuzz/x509-test" => [
             "libcrypto"
+        ],
+        "include/internal/param_names.h" => [
+            "util/perl|OpenSSL/paramnames.pm"
+        ],
+        "include/openssl/core_names.h" => [
+            "util/perl|OpenSSL/paramnames.pm"
         ],
         "libcrypto.ld" => [
             "configdata.pm",
             "util/perl/OpenSSL/Ordinals.pm"
+        ],
+        "libcrypto.pc" => [
+            "builddata.pm"
         ],
         "libssl" => [
             "libcrypto"
@@ -6978,6 +7272,14 @@ our %unified_info = (
         "libssl.ld" => [
             "configdata.pm",
             "util/perl/OpenSSL/Ordinals.pm"
+        ],
+        "libssl.pc" => [
+            "builddata.pm"
+        ],
+        "openssl.pc" => [
+            "builddata.pm",
+            "libcrypto.pc",
+            "libssl.pc"
         ],
         "providers/common/der/der_digests_gen.c" => [
             "providers/common/der/DIGESTS.asn1",
@@ -6996,9 +7298,17 @@ our %unified_info = (
             "providers/common/der/ECX.asn1",
             "providers/common/der/oids_to_c.pm"
         ],
+        "providers/common/der/der_ml_dsa_gen.c" => [
+            "providers/common/der/ML_DSA.asn1",
+            "providers/common/der/oids_to_c.pm"
+        ],
         "providers/common/der/der_rsa_gen.c" => [
             "providers/common/der/NIST.asn1",
             "providers/common/der/RSA.asn1",
+            "providers/common/der/oids_to_c.pm"
+        ],
+        "providers/common/der/der_slh_dsa_gen.c" => [
+            "providers/common/der/SLH_DSA.asn1",
             "providers/common/der/oids_to_c.pm"
         ],
         "providers/common/der/der_sm2_gen.c" => [
@@ -7040,12 +7350,24 @@ our %unified_info = (
         "providers/common/der/libcommon-lib-der_ecx_key.o" => [
             "providers/common/include/prov/der_ecx.h"
         ],
+        "providers/common/der/libcommon-lib-der_ml_dsa_gen.o" => [
+            "providers/common/include/prov/der_ml_dsa.h"
+        ],
+        "providers/common/der/libcommon-lib-der_ml_dsa_key.o" => [
+            "providers/common/include/prov/der_ml_dsa.h"
+        ],
         "providers/common/der/libcommon-lib-der_rsa_gen.o" => [
             "providers/common/include/prov/der_rsa.h"
         ],
         "providers/common/der/libcommon-lib-der_rsa_key.o" => [
             "providers/common/include/prov/der_digests.h",
             "providers/common/include/prov/der_rsa.h"
+        ],
+        "providers/common/der/libcommon-lib-der_slh_dsa_gen.o" => [
+            "providers/common/include/prov/der_slh_dsa.h"
+        ],
+        "providers/common/der/libcommon-lib-der_slh_dsa_key.o" => [
+            "providers/common/include/prov/der_slh_dsa.h"
         ],
         "providers/common/der/libcommon-lib-der_wrap_gen.o" => [
             "providers/common/include/prov/der_wrap.h"
@@ -7086,9 +7408,17 @@ our %unified_info = (
             "providers/common/der/ECX.asn1",
             "providers/common/der/oids_to_c.pm"
         ],
+        "providers/common/include/prov/der_ml_dsa.h" => [
+            "providers/common/der/ML_DSA.asn1",
+            "providers/common/der/oids_to_c.pm"
+        ],
         "providers/common/include/prov/der_rsa.h" => [
             "providers/common/der/NIST.asn1",
             "providers/common/der/RSA.asn1",
+            "providers/common/der/oids_to_c.pm"
+        ],
+        "providers/common/include/prov/der_slh_dsa.h" => [
+            "providers/common/der/SLH_DSA.asn1",
             "providers/common/der/oids_to_c.pm"
         ],
         "providers/common/include/prov/der_sm2.h" => [
@@ -7123,8 +7453,14 @@ our %unified_info = (
         "providers/implementations/signature/libdefault-lib-eddsa_sig.o" => [
             "providers/common/include/prov/der_ecx.h"
         ],
+        "providers/implementations/signature/libdefault-lib-ml_dsa_sig.o" => [
+            "providers/common/include/prov/der_ml_dsa.h"
+        ],
         "providers/implementations/signature/libdefault-lib-rsa_sig.o" => [
             "providers/common/include/prov/der_rsa.h"
+        ],
+        "providers/implementations/signature/libdefault-lib-slh_dsa_sig.o" => [
+            "providers/common/include/prov/der_slh_dsa.h"
         ],
         "providers/implementations/signature/libdefault-lib-sm2_sig.o" => [
             "providers/common/include/prov/der_sm2.h"
@@ -7138,8 +7474,14 @@ our %unified_info = (
         "providers/implementations/signature/libfips-lib-eddsa_sig.o" => [
             "providers/common/include/prov/der_ecx.h"
         ],
+        "providers/implementations/signature/libfips-lib-ml_dsa_sig.o" => [
+            "providers/common/include/prov/der_ml_dsa.h"
+        ],
         "providers/implementations/signature/libfips-lib-rsa_sig.o" => [
             "providers/common/include/prov/der_rsa.h"
+        ],
+        "providers/implementations/signature/libfips-lib-slh_dsa_sig.o" => [
+            "providers/common/include/prov/der_slh_dsa.h"
         ],
         "providers/legacy" => [
             "libcrypto",
@@ -7278,6 +7620,10 @@ our %unified_info = (
             "libcrypto",
             "libssl"
         ],
+        "test/buildtest_c_byteorder" => [
+            "libcrypto",
+            "libssl"
+        ],
         "test/buildtest_c_camellia" => [
             "libcrypto",
             "libssl"
@@ -7310,10 +7656,6 @@ our %unified_info = (
             "libcrypto",
             "libssl"
         ],
-        "test/buildtest_c_core_names" => [
-            "libcrypto",
-            "libssl"
-        ],
         "test/buildtest_c_core_object" => [
             "libcrypto",
             "libssl"
@@ -7343,6 +7685,10 @@ our %unified_info = (
             "libssl"
         ],
         "test/buildtest_c_e_os2" => [
+            "libcrypto",
+            "libssl"
+        ],
+        "test/buildtest_c_e_ostime" => [
             "libcrypto",
             "libssl"
         ],
@@ -7382,11 +7728,19 @@ our %unified_info = (
             "libcrypto",
             "libssl"
         ],
+        "test/buildtest_c_hpke" => [
+            "libcrypto",
+            "libssl"
+        ],
         "test/buildtest_c_http" => [
             "libcrypto",
             "libssl"
         ],
         "test/buildtest_c_idea" => [
+            "libcrypto",
+            "libssl"
+        ],
+        "test/buildtest_c_indicator" => [
             "libcrypto",
             "libssl"
         ],
@@ -7407,6 +7761,10 @@ our %unified_info = (
             "libssl"
         ],
         "test/buildtest_c_mdc2" => [
+            "libcrypto",
+            "libssl"
+        ],
+        "test/buildtest_c_ml_kem" => [
             "libcrypto",
             "libssl"
         ],
@@ -7447,6 +7805,10 @@ our %unified_info = (
             "libssl"
         ],
         "test/buildtest_c_provider" => [
+            "libcrypto",
+            "libssl"
+        ],
+        "test/buildtest_c_quic" => [
             "libcrypto",
             "libssl"
         ],
@@ -7503,6 +7865,10 @@ our %unified_info = (
             "libssl"
         ],
         "test/buildtest_c_symhacks" => [
+            "libcrypto",
+            "libssl"
+        ],
+        "test/buildtest_c_thread" => [
             "libcrypto",
             "libssl"
         ],
@@ -8183,12 +8549,14 @@ our %unified_info = (
                 "apps/lib/libapps-lib-app_rand.o",
                 "apps/lib/libapps-lib-app_x509.o",
                 "apps/lib/libapps-lib-apps.o",
+                "apps/lib/libapps-lib-apps_opt_printf.o",
                 "apps/lib/libapps-lib-apps_ui.o",
                 "apps/lib/libapps-lib-columns.o",
                 "apps/lib/libapps-lib-engine.o",
                 "apps/lib/libapps-lib-engine_loader.o",
                 "apps/lib/libapps-lib-fmt.o",
                 "apps/lib/libapps-lib-http_server.o",
+                "apps/lib/libapps-lib-log.o",
                 "apps/lib/libapps-lib-names.o",
                 "apps/lib/libapps-lib-opt.o",
                 "apps/lib/libapps-lib-s_cb.o",
@@ -8214,6 +8582,7 @@ our %unified_info = (
                 "crypto/libcrypto-lib-armcap.o",
                 "crypto/libcrypto-lib-asn1_dsa.o",
                 "crypto/libcrypto-lib-bsearch.o",
+                "crypto/libcrypto-lib-comp_methods.o",
                 "crypto/libcrypto-lib-context.o",
                 "crypto/libcrypto-lib-core_algorithm.o",
                 "crypto/libcrypto-lib-core_fetch.o",
@@ -8223,10 +8592,13 @@ our %unified_info = (
                 "crypto/libcrypto-lib-cryptlib.o",
                 "crypto/libcrypto-lib-ctype.o",
                 "crypto/libcrypto-lib-cversion.o",
+                "crypto/libcrypto-lib-defaults.o",
                 "crypto/libcrypto-lib-der_writer.o",
+                "crypto/libcrypto-lib-deterministic_nonce.o",
                 "crypto/libcrypto-lib-ebcdic.o",
                 "crypto/libcrypto-lib-ex_data.o",
                 "crypto/libcrypto-lib-getenv.o",
+                "crypto/libcrypto-lib-indicator_core.o",
                 "crypto/libcrypto-lib-info.o",
                 "crypto/libcrypto-lib-init.o",
                 "crypto/libcrypto-lib-initthread.o",
@@ -8243,6 +8615,7 @@ our %unified_info = (
                 "crypto/libcrypto-lib-params.o",
                 "crypto/libcrypto-lib-params_dup.o",
                 "crypto/libcrypto-lib-params_from_text.o",
+                "crypto/libcrypto-lib-params_idx.o",
                 "crypto/libcrypto-lib-passphrase.o",
                 "crypto/libcrypto-lib-provider.o",
                 "crypto/libcrypto-lib-provider_child.o",
@@ -8250,12 +8623,16 @@ our %unified_info = (
                 "crypto/libcrypto-lib-provider_core.o",
                 "crypto/libcrypto-lib-provider_predefined.o",
                 "crypto/libcrypto-lib-punycode.o",
+                "crypto/libcrypto-lib-quic_vlint.o",
                 "crypto/libcrypto-lib-self_test_core.o",
+                "crypto/libcrypto-lib-sleep.o",
                 "crypto/libcrypto-lib-sparse_array.o",
+                "crypto/libcrypto-lib-ssl_err.o",
                 "crypto/libcrypto-lib-threads_lib.o",
                 "crypto/libcrypto-lib-threads_none.o",
                 "crypto/libcrypto-lib-threads_pthread.o",
                 "crypto/libcrypto-lib-threads_win.o",
+                "crypto/libcrypto-lib-time.o",
                 "crypto/libcrypto-lib-trace.o",
                 "crypto/libcrypto-lib-uid.o",
                 "crypto/libfips-lib-arm64cpuid.o",
@@ -8279,6 +8656,7 @@ our %unified_info = (
                 "crypto/libfips-lib-params.o",
                 "crypto/libfips-lib-params_dup.o",
                 "crypto/libfips-lib-params_from_text.o",
+                "crypto/libfips-lib-params_idx.o",
                 "crypto/libfips-lib-provider_core.o",
                 "crypto/libfips-lib-provider_predefined.o",
                 "crypto/libfips-lib-self_test_core.o",
@@ -8286,7 +8664,8 @@ our %unified_info = (
                 "crypto/libfips-lib-threads_lib.o",
                 "crypto/libfips-lib-threads_none.o",
                 "crypto/libfips-lib-threads_pthread.o",
-                "crypto/libfips-lib-threads_win.o"
+                "crypto/libfips-lib-threads_win.o",
+                "crypto/libfips-lib-time.o"
             ],
             "products" => {
                 "lib" => [
@@ -8306,12 +8685,14 @@ our %unified_info = (
                 "crypto/aes/libcrypto-lib-aes_ofb.o",
                 "crypto/aes/libcrypto-lib-aes_wrap.o",
                 "crypto/aes/libcrypto-lib-aesv8-armx.o",
+                "crypto/aes/libcrypto-lib-bsaes-armv8.o",
                 "crypto/aes/libcrypto-lib-vpaes-armv8.o",
                 "crypto/aes/libfips-lib-aes_cbc.o",
                 "crypto/aes/libfips-lib-aes_core.o",
                 "crypto/aes/libfips-lib-aes_ecb.o",
                 "crypto/aes/libfips-lib-aes_misc.o",
                 "crypto/aes/libfips-lib-aesv8-armx.o",
+                "crypto/aes/libfips-lib-bsaes-armv8.o",
                 "crypto/aes/libfips-lib-vpaes-armv8.o"
             ],
             "products" => {
@@ -8464,6 +8845,7 @@ our %unified_info = (
                 "crypto/bio/libcrypto-lib-bss_conn.o",
                 "crypto/bio/libcrypto-lib-bss_core.o",
                 "crypto/bio/libcrypto-lib-bss_dgram.o",
+                "crypto/bio/libcrypto-lib-bss_dgram_pair.o",
                 "crypto/bio/libcrypto-lib-bss_fd.o",
                 "crypto/bio/libcrypto-lib-bss_file.o",
                 "crypto/bio/libcrypto-lib-bss_log.o",
@@ -8596,6 +8978,7 @@ our %unified_info = (
         },
         "crypto/chacha" => {
             "deps" => [
+                "crypto/chacha/libcrypto-lib-chacha-armv8-sve.o",
                 "crypto/chacha/libcrypto-lib-chacha-armv8.o"
             ],
             "products" => {
@@ -8622,6 +9005,7 @@ our %unified_info = (
                 "crypto/cmp/libcrypto-lib-cmp_client.o",
                 "crypto/cmp/libcrypto-lib-cmp_ctx.o",
                 "crypto/cmp/libcrypto-lib-cmp_err.o",
+                "crypto/cmp/libcrypto-lib-cmp_genm.o",
                 "crypto/cmp/libcrypto-lib-cmp_hdr.o",
                 "crypto/cmp/libcrypto-lib-cmp_http.o",
                 "crypto/cmp/libcrypto-lib-cmp_msg.o",
@@ -8857,6 +9241,9 @@ our %unified_info = (
                 "crypto/ec/libcrypto-lib-ecp_nistz256-armv8.o",
                 "crypto/ec/libcrypto-lib-ecp_nistz256.o",
                 "crypto/ec/libcrypto-lib-ecp_oct.o",
+                "crypto/ec/libcrypto-lib-ecp_sm2p256-armv8.o",
+                "crypto/ec/libcrypto-lib-ecp_sm2p256.o",
+                "crypto/ec/libcrypto-lib-ecp_sm2p256_table.o",
                 "crypto/ec/libcrypto-lib-ecp_smpl.o",
                 "crypto/ec/libcrypto-lib-ecx_backend.o",
                 "crypto/ec/libcrypto-lib-ecx_key.o",
@@ -8884,6 +9271,9 @@ our %unified_info = (
                 "crypto/ec/libfips-lib-ecp_nistz256-armv8.o",
                 "crypto/ec/libfips-lib-ecp_nistz256.o",
                 "crypto/ec/libfips-lib-ecp_oct.o",
+                "crypto/ec/libfips-lib-ecp_sm2p256-armv8.o",
+                "crypto/ec/libfips-lib-ecp_sm2p256.o",
+                "crypto/ec/libfips-lib-ecp_sm2p256_table.o",
                 "crypto/ec/libfips-lib-ecp_smpl.o",
                 "crypto/ec/libfips-lib-ecx_backend.o",
                 "crypto/ec/libfips-lib-ecx_key.o"
@@ -8993,7 +9383,9 @@ our %unified_info = (
                 "crypto/err/libcrypto-lib-err_all.o",
                 "crypto/err/libcrypto-lib-err_all_legacy.o",
                 "crypto/err/libcrypto-lib-err_blocks.o",
-                "crypto/err/libcrypto-lib-err_prn.o"
+                "crypto/err/libcrypto-lib-err_mark.o",
+                "crypto/err/libcrypto-lib-err_prn.o",
+                "crypto/err/libcrypto-lib-err_save.o"
             ],
             "products" => {
                 "lib" => [
@@ -9094,7 +9486,9 @@ our %unified_info = (
                 "crypto/evp/libcrypto-lib-pmeth_check.o",
                 "crypto/evp/libcrypto-lib-pmeth_gn.o",
                 "crypto/evp/libcrypto-lib-pmeth_lib.o",
+                "crypto/evp/libcrypto-lib-s_lib.o",
                 "crypto/evp/libcrypto-lib-signature.o",
+                "crypto/evp/libcrypto-lib-skeymgmt_meth.o",
                 "crypto/evp/libfips-lib-asymcipher.o",
                 "crypto/evp/libfips-lib-dh_support.o",
                 "crypto/evp/libfips-lib-digest.o",
@@ -9110,14 +9504,15 @@ our %unified_info = (
                 "crypto/evp/libfips-lib-kem.o",
                 "crypto/evp/libfips-lib-keymgmt_lib.o",
                 "crypto/evp/libfips-lib-keymgmt_meth.o",
-                "crypto/evp/libfips-lib-m_sigver.o",
                 "crypto/evp/libfips-lib-mac_lib.o",
                 "crypto/evp/libfips-lib-mac_meth.o",
                 "crypto/evp/libfips-lib-p_lib.o",
                 "crypto/evp/libfips-lib-pmeth_check.o",
                 "crypto/evp/libfips-lib-pmeth_gn.o",
                 "crypto/evp/libfips-lib-pmeth_lib.o",
-                "crypto/evp/libfips-lib-signature.o"
+                "crypto/evp/libfips-lib-s_lib.o",
+                "crypto/evp/libfips-lib-signature.o",
+                "crypto/evp/libfips-lib-skeymgmt_meth.o"
             ],
             "products" => {
                 "lib" => [
@@ -9150,6 +9545,20 @@ our %unified_info = (
                 ]
             }
         },
+        "crypto/hashtable" => {
+            "deps" => [
+                "crypto/hashtable/libcrypto-lib-hashfunc.o",
+                "crypto/hashtable/libcrypto-lib-hashtable.o",
+                "crypto/hashtable/libfips-lib-hashfunc.o",
+                "crypto/hashtable/libfips-lib-hashtable.o"
+            ],
+            "products" => {
+                "lib" => [
+                    "libcrypto",
+                    "providers/libfips.a"
+                ]
+            }
+        },
         "crypto/hmac" => {
             "deps" => [
                 "crypto/hmac/libcrypto-lib-hmac.o",
@@ -9159,6 +9568,17 @@ our %unified_info = (
                 "lib" => [
                     "libcrypto",
                     "providers/libfips.a"
+                ]
+            }
+        },
+        "crypto/hpke" => {
+            "deps" => [
+                "crypto/hpke/libcrypto-lib-hpke.o",
+                "crypto/hpke/libcrypto-lib-hpke_util.o"
+            ],
+            "products" => {
+                "lib" => [
+                    "libcrypto"
                 ]
             }
         },
@@ -9224,6 +9644,7 @@ our %unified_info = (
         },
         "crypto/md5" => {
             "deps" => [
+                "crypto/md5/libcrypto-lib-md5-aarch64.o",
                 "crypto/md5/libcrypto-lib-md5_dgst.o",
                 "crypto/md5/libcrypto-lib-md5_one.o",
                 "crypto/md5/libcrypto-lib-md5_sha1.o"
@@ -9245,8 +9666,47 @@ our %unified_info = (
                 ]
             }
         },
+        "crypto/ml_dsa" => {
+            "deps" => [
+                "crypto/ml_dsa/libcrypto-lib-ml_dsa_encoders.o",
+                "crypto/ml_dsa/libcrypto-lib-ml_dsa_key.o",
+                "crypto/ml_dsa/libcrypto-lib-ml_dsa_key_compress.o",
+                "crypto/ml_dsa/libcrypto-lib-ml_dsa_matrix.o",
+                "crypto/ml_dsa/libcrypto-lib-ml_dsa_ntt.o",
+                "crypto/ml_dsa/libcrypto-lib-ml_dsa_params.o",
+                "crypto/ml_dsa/libcrypto-lib-ml_dsa_sample.o",
+                "crypto/ml_dsa/libcrypto-lib-ml_dsa_sign.o",
+                "crypto/ml_dsa/libfips-lib-ml_dsa_encoders.o",
+                "crypto/ml_dsa/libfips-lib-ml_dsa_key.o",
+                "crypto/ml_dsa/libfips-lib-ml_dsa_key_compress.o",
+                "crypto/ml_dsa/libfips-lib-ml_dsa_matrix.o",
+                "crypto/ml_dsa/libfips-lib-ml_dsa_ntt.o",
+                "crypto/ml_dsa/libfips-lib-ml_dsa_params.o",
+                "crypto/ml_dsa/libfips-lib-ml_dsa_sample.o",
+                "crypto/ml_dsa/libfips-lib-ml_dsa_sign.o"
+            ],
+            "products" => {
+                "lib" => [
+                    "libcrypto",
+                    "providers/libfips.a"
+                ]
+            }
+        },
+        "crypto/ml_kem" => {
+            "deps" => [
+                "crypto/ml_kem/libcrypto-lib-ml_kem.o",
+                "crypto/ml_kem/libfips-lib-ml_kem.o"
+            ],
+            "products" => {
+                "lib" => [
+                    "libcrypto",
+                    "providers/libfips.a"
+                ]
+            }
+        },
         "crypto/modes" => {
             "deps" => [
+                "crypto/modes/libcrypto-lib-aes-gcm-armv8-unroll8_64.o",
                 "crypto/modes/libcrypto-lib-aes-gcm-armv8_64.o",
                 "crypto/modes/libcrypto-lib-cbc128.o",
                 "crypto/modes/libcrypto-lib-ccm128.o",
@@ -9260,6 +9720,8 @@ our %unified_info = (
                 "crypto/modes/libcrypto-lib-siv128.o",
                 "crypto/modes/libcrypto-lib-wrap128.o",
                 "crypto/modes/libcrypto-lib-xts128.o",
+                "crypto/modes/libcrypto-lib-xts128gb.o",
+                "crypto/modes/libfips-lib-aes-gcm-armv8-unroll8_64.o",
                 "crypto/modes/libfips-lib-aes-gcm-armv8_64.o",
                 "crypto/modes/libfips-lib-cbc128.o",
                 "crypto/modes/libfips-lib-ccm128.o",
@@ -9269,7 +9731,8 @@ our %unified_info = (
                 "crypto/modes/libfips-lib-ghashv8-armx.o",
                 "crypto/modes/libfips-lib-ofb128.o",
                 "crypto/modes/libfips-lib-wrap128.o",
-                "crypto/modes/libfips-lib-xts128.o"
+                "crypto/modes/libfips-lib-xts128.o",
+                "crypto/modes/libfips-lib-xts128gb.o"
             ],
             "products" => {
                 "lib" => [
@@ -9413,6 +9876,7 @@ our %unified_info = (
                 "crypto/rand/libcrypto-lib-rand_lib.o",
                 "crypto/rand/libcrypto-lib-rand_meth.o",
                 "crypto/rand/libcrypto-lib-rand_pool.o",
+                "crypto/rand/libcrypto-lib-rand_uniform.o",
                 "crypto/rand/libcrypto-lib-randfile.o",
                 "crypto/rand/libfips-lib-rand_lib.o"
             ],
@@ -9563,6 +10027,36 @@ our %unified_info = (
                 ]
             }
         },
+        "crypto/slh_dsa" => {
+            "deps" => [
+                "crypto/slh_dsa/libcrypto-lib-slh_adrs.o",
+                "crypto/slh_dsa/libcrypto-lib-slh_dsa.o",
+                "crypto/slh_dsa/libcrypto-lib-slh_dsa_hash_ctx.o",
+                "crypto/slh_dsa/libcrypto-lib-slh_dsa_key.o",
+                "crypto/slh_dsa/libcrypto-lib-slh_fors.o",
+                "crypto/slh_dsa/libcrypto-lib-slh_hash.o",
+                "crypto/slh_dsa/libcrypto-lib-slh_hypertree.o",
+                "crypto/slh_dsa/libcrypto-lib-slh_params.o",
+                "crypto/slh_dsa/libcrypto-lib-slh_wots.o",
+                "crypto/slh_dsa/libcrypto-lib-slh_xmss.o",
+                "crypto/slh_dsa/libfips-lib-slh_adrs.o",
+                "crypto/slh_dsa/libfips-lib-slh_dsa.o",
+                "crypto/slh_dsa/libfips-lib-slh_dsa_hash_ctx.o",
+                "crypto/slh_dsa/libfips-lib-slh_dsa_key.o",
+                "crypto/slh_dsa/libfips-lib-slh_fors.o",
+                "crypto/slh_dsa/libfips-lib-slh_hash.o",
+                "crypto/slh_dsa/libfips-lib-slh_hypertree.o",
+                "crypto/slh_dsa/libfips-lib-slh_params.o",
+                "crypto/slh_dsa/libfips-lib-slh_wots.o",
+                "crypto/slh_dsa/libfips-lib-slh_xmss.o"
+            ],
+            "products" => {
+                "lib" => [
+                    "libcrypto",
+                    "providers/libfips.a"
+                ]
+            }
+        },
         "crypto/sm2" => {
             "deps" => [
                 "crypto/sm2/libcrypto-lib-sm2_crypt.o",
@@ -9579,6 +10073,7 @@ our %unified_info = (
         "crypto/sm3" => {
             "deps" => [
                 "crypto/sm3/libcrypto-lib-legacy_sm3.o",
+                "crypto/sm3/libcrypto-lib-sm3-armv8.o",
                 "crypto/sm3/libcrypto-lib-sm3.o"
             ],
             "products" => {
@@ -9589,7 +10084,10 @@ our %unified_info = (
         },
         "crypto/sm4" => {
             "deps" => [
-                "crypto/sm4/libcrypto-lib-sm4.o"
+                "crypto/sm4/libcrypto-lib-sm4-armv8.o",
+                "crypto/sm4/libcrypto-lib-sm4.o",
+                "crypto/sm4/libcrypto-lib-vpsm4-armv8.o",
+                "crypto/sm4/libcrypto-lib-vpsm4_ex-armv8.o"
             ],
             "products" => {
                 "lib" => [
@@ -9633,6 +10131,38 @@ our %unified_info = (
             "products" => {
                 "lib" => [
                     "libcrypto"
+                ]
+            }
+        },
+        "crypto/thread" => {
+            "deps" => [
+                "crypto/thread/libcrypto-lib-api.o",
+                "crypto/thread/libcrypto-lib-arch.o",
+                "crypto/thread/libcrypto-lib-internal.o",
+                "crypto/thread/libfips-lib-api.o",
+                "crypto/thread/libfips-lib-arch.o",
+                "crypto/thread/libfips-lib-internal.o"
+            ],
+            "products" => {
+                "lib" => [
+                    "libcrypto",
+                    "providers/libfips.a"
+                ]
+            }
+        },
+        "crypto/thread/arch" => {
+            "deps" => [
+                "crypto/thread/arch/libcrypto-lib-thread_none.o",
+                "crypto/thread/arch/libcrypto-lib-thread_posix.o",
+                "crypto/thread/arch/libcrypto-lib-thread_win.o",
+                "crypto/thread/arch/libfips-lib-thread_none.o",
+                "crypto/thread/arch/libfips-lib-thread_posix.o",
+                "crypto/thread/arch/libfips-lib-thread_win.o"
+            ],
+            "products" => {
+                "lib" => [
+                    "libcrypto",
+                    "providers/libfips.a"
                 ]
             }
         },
@@ -9702,14 +10232,22 @@ our %unified_info = (
                 "crypto/x509/libcrypto-lib-pcy_map.o",
                 "crypto/x509/libcrypto-lib-pcy_node.o",
                 "crypto/x509/libcrypto-lib-pcy_tree.o",
+                "crypto/x509/libcrypto-lib-t_acert.o",
                 "crypto/x509/libcrypto-lib-t_crl.o",
                 "crypto/x509/libcrypto-lib-t_req.o",
                 "crypto/x509/libcrypto-lib-t_x509.o",
+                "crypto/x509/libcrypto-lib-v3_aaa.o",
+                "crypto/x509/libcrypto-lib-v3_ac_tgt.o",
                 "crypto/x509/libcrypto-lib-v3_addr.o",
                 "crypto/x509/libcrypto-lib-v3_admis.o",
                 "crypto/x509/libcrypto-lib-v3_akeya.o",
                 "crypto/x509/libcrypto-lib-v3_akid.o",
                 "crypto/x509/libcrypto-lib-v3_asid.o",
+                "crypto/x509/libcrypto-lib-v3_attrdesc.o",
+                "crypto/x509/libcrypto-lib-v3_attrmap.o",
+                "crypto/x509/libcrypto-lib-v3_audit_id.o",
+                "crypto/x509/libcrypto-lib-v3_authattid.o",
+                "crypto/x509/libcrypto-lib-v3_battcons.o",
                 "crypto/x509/libcrypto-lib-v3_bcons.o",
                 "crypto/x509/libcrypto-lib-v3_bitst.o",
                 "crypto/x509/libcrypto-lib-v3_conf.o",
@@ -9718,12 +10256,17 @@ our %unified_info = (
                 "crypto/x509/libcrypto-lib-v3_enum.o",
                 "crypto/x509/libcrypto-lib-v3_extku.o",
                 "crypto/x509/libcrypto-lib-v3_genn.o",
+                "crypto/x509/libcrypto-lib-v3_group_ac.o",
                 "crypto/x509/libcrypto-lib-v3_ia5.o",
+                "crypto/x509/libcrypto-lib-v3_ind_iss.o",
                 "crypto/x509/libcrypto-lib-v3_info.o",
                 "crypto/x509/libcrypto-lib-v3_int.o",
+                "crypto/x509/libcrypto-lib-v3_iobo.o",
                 "crypto/x509/libcrypto-lib-v3_ist.o",
                 "crypto/x509/libcrypto-lib-v3_lib.o",
                 "crypto/x509/libcrypto-lib-v3_ncons.o",
+                "crypto/x509/libcrypto-lib-v3_no_ass.o",
+                "crypto/x509/libcrypto-lib-v3_no_rev_avail.o",
                 "crypto/x509/libcrypto-lib-v3_pci.o",
                 "crypto/x509/libcrypto-lib-v3_pcia.o",
                 "crypto/x509/libcrypto-lib-v3_pcons.o",
@@ -9731,13 +10274,20 @@ our %unified_info = (
                 "crypto/x509/libcrypto-lib-v3_pmaps.o",
                 "crypto/x509/libcrypto-lib-v3_prn.o",
                 "crypto/x509/libcrypto-lib-v3_purp.o",
+                "crypto/x509/libcrypto-lib-v3_rolespec.o",
                 "crypto/x509/libcrypto-lib-v3_san.o",
+                "crypto/x509/libcrypto-lib-v3_sda.o",
+                "crypto/x509/libcrypto-lib-v3_single_use.o",
                 "crypto/x509/libcrypto-lib-v3_skid.o",
+                "crypto/x509/libcrypto-lib-v3_soa_id.o",
                 "crypto/x509/libcrypto-lib-v3_sxnet.o",
+                "crypto/x509/libcrypto-lib-v3_timespec.o",
                 "crypto/x509/libcrypto-lib-v3_tlsf.o",
+                "crypto/x509/libcrypto-lib-v3_usernotice.o",
                 "crypto/x509/libcrypto-lib-v3_utf8.o",
                 "crypto/x509/libcrypto-lib-v3_utl.o",
                 "crypto/x509/libcrypto-lib-v3err.o",
+                "crypto/x509/libcrypto-lib-x509_acert.o",
                 "crypto/x509/libcrypto-lib-x509_att.o",
                 "crypto/x509/libcrypto-lib-x509_cmp.o",
                 "crypto/x509/libcrypto-lib-x509_d2.o",
@@ -9755,6 +10305,7 @@ our %unified_info = (
                 "crypto/x509/libcrypto-lib-x509_v3.o",
                 "crypto/x509/libcrypto-lib-x509_vfy.o",
                 "crypto/x509/libcrypto-lib-x509_vpm.o",
+                "crypto/x509/libcrypto-lib-x509aset.o",
                 "crypto/x509/libcrypto-lib-x509cset.o",
                 "crypto/x509/libcrypto-lib-x509name.o",
                 "crypto/x509/libcrypto-lib-x509rset.o",
@@ -9764,6 +10315,7 @@ our %unified_info = (
                 "crypto/x509/libcrypto-lib-x_attrib.o",
                 "crypto/x509/libcrypto-lib-x_crl.o",
                 "crypto/x509/libcrypto-lib-x_exten.o",
+                "crypto/x509/libcrypto-lib-x_ietfatt.o",
                 "crypto/x509/libcrypto-lib-x_name.o",
                 "crypto/x509/libcrypto-lib-x_pubkey.o",
                 "crypto/x509/libcrypto-lib-x_req.o",
@@ -9790,6 +10342,7 @@ our %unified_info = (
         "fuzz" => {
             "products" => {
                 "bin" => [
+                    "fuzz/acert-test",
                     "fuzz/asn1-test",
                     "fuzz/asn1parse-test",
                     "fuzz/bignum-test",
@@ -9800,7 +10353,24 @@ our %unified_info = (
                     "fuzz/conf-test",
                     "fuzz/crl-test",
                     "fuzz/ct-test",
+                    "fuzz/decoder-test",
+                    "fuzz/dtlsclient-test",
+                    "fuzz/dtlsserver-test",
+                    "fuzz/hashtable-test",
+                    "fuzz/ml-dsa-test",
+                    "fuzz/ml-kem-test",
+                    "fuzz/pem-test",
+                    "fuzz/provider-test",
+                    "fuzz/punycode-test",
+                    "fuzz/quic-client-test",
+                    "fuzz/quic-lcidm-test",
+                    "fuzz/quic-rcidm-test",
+                    "fuzz/quic-server-test",
+                    "fuzz/quic-srtm-test",
                     "fuzz/server-test",
+                    "fuzz/slh-dsa-test",
+                    "fuzz/smime-test",
+                    "fuzz/v3name-test",
                     "fuzz/x509-test"
                 ]
             }
@@ -9867,8 +10437,12 @@ our %unified_info = (
                 "providers/common/der/libcommon-lib-der_ec_sig.o",
                 "providers/common/der/libcommon-lib-der_ecx_gen.o",
                 "providers/common/der/libcommon-lib-der_ecx_key.o",
+                "providers/common/der/libcommon-lib-der_ml_dsa_gen.o",
+                "providers/common/der/libcommon-lib-der_ml_dsa_key.o",
                 "providers/common/der/libcommon-lib-der_rsa_gen.o",
                 "providers/common/der/libcommon-lib-der_rsa_key.o",
+                "providers/common/der/libcommon-lib-der_slh_dsa_gen.o",
+                "providers/common/der/libcommon-lib-der_slh_dsa_key.o",
                 "providers/common/der/libcommon-lib-der_wrap_gen.o",
                 "providers/common/der/libdefault-lib-der_rsa_sig.o",
                 "providers/common/der/libdefault-lib-der_sm2_gen.o",
@@ -9887,6 +10461,7 @@ our %unified_info = (
         "providers/fips" => {
             "deps" => [
                 "providers/fips/fips-dso-fips_entry.o",
+                "providers/fips/libfips-lib-fipsindicator.o",
                 "providers/fips/libfips-lib-fipsprov.o",
                 "providers/fips/libfips-lib-self_test.o",
                 "providers/fips/libfips-lib-self_test_kats.o"
@@ -9930,6 +10505,9 @@ our %unified_info = (
                 "providers/implementations/ciphers/libdefault-lib-cipher_aes_ccm_hw.o",
                 "providers/implementations/ciphers/libdefault-lib-cipher_aes_gcm.o",
                 "providers/implementations/ciphers/libdefault-lib-cipher_aes_gcm_hw.o",
+                "providers/implementations/ciphers/libdefault-lib-cipher_aes_gcm_siv.o",
+                "providers/implementations/ciphers/libdefault-lib-cipher_aes_gcm_siv_hw.o",
+                "providers/implementations/ciphers/libdefault-lib-cipher_aes_gcm_siv_polyval.o",
                 "providers/implementations/ciphers/libdefault-lib-cipher_aes_hw.o",
                 "providers/implementations/ciphers/libdefault-lib-cipher_aes_ocb.o",
                 "providers/implementations/ciphers/libdefault-lib-cipher_aes_ocb_hw.o",
@@ -9954,7 +10532,13 @@ our %unified_info = (
                 "providers/implementations/ciphers/libdefault-lib-cipher_cts.o",
                 "providers/implementations/ciphers/libdefault-lib-cipher_null.o",
                 "providers/implementations/ciphers/libdefault-lib-cipher_sm4.o",
+                "providers/implementations/ciphers/libdefault-lib-cipher_sm4_ccm.o",
+                "providers/implementations/ciphers/libdefault-lib-cipher_sm4_ccm_hw.o",
+                "providers/implementations/ciphers/libdefault-lib-cipher_sm4_gcm.o",
+                "providers/implementations/ciphers/libdefault-lib-cipher_sm4_gcm_hw.o",
                 "providers/implementations/ciphers/libdefault-lib-cipher_sm4_hw.o",
+                "providers/implementations/ciphers/libdefault-lib-cipher_sm4_xts.o",
+                "providers/implementations/ciphers/libdefault-lib-cipher_sm4_xts_hw.o",
                 "providers/implementations/ciphers/libdefault-lib-cipher_tdes.o",
                 "providers/implementations/ciphers/libdefault-lib-cipher_tdes_common.o",
                 "providers/implementations/ciphers/libdefault-lib-cipher_tdes_default.o",
@@ -10051,7 +10635,10 @@ our %unified_info = (
                 "providers/implementations/encode_decode/libdefault-lib-encode_key2blob.o",
                 "providers/implementations/encode_decode/libdefault-lib-encode_key2ms.o",
                 "providers/implementations/encode_decode/libdefault-lib-encode_key2text.o",
-                "providers/implementations/encode_decode/libdefault-lib-endecoder_common.o"
+                "providers/implementations/encode_decode/libdefault-lib-endecoder_common.o",
+                "providers/implementations/encode_decode/libdefault-lib-ml_common_codecs.o",
+                "providers/implementations/encode_decode/libdefault-lib-ml_dsa_codecs.o",
+                "providers/implementations/encode_decode/libdefault-lib-ml_kem_codecs.o"
             ],
             "products" => {
                 "lib" => [
@@ -10079,7 +10666,9 @@ our %unified_info = (
         },
         "providers/implementations/kdfs" => {
             "deps" => [
+                "providers/implementations/kdfs/libdefault-lib-argon2.o",
                 "providers/implementations/kdfs/libdefault-lib-hkdf.o",
+                "providers/implementations/kdfs/libdefault-lib-hmacdrbg_kdf.o",
                 "providers/implementations/kdfs/libdefault-lib-kbkdf.o",
                 "providers/implementations/kdfs/libdefault-lib-krb5kdf.o",
                 "providers/implementations/kdfs/libdefault-lib-pbkdf2.o",
@@ -10098,7 +10687,8 @@ our %unified_info = (
                 "providers/implementations/kdfs/libfips-lib-sskdf.o",
                 "providers/implementations/kdfs/libfips-lib-tls1_prf.o",
                 "providers/implementations/kdfs/libfips-lib-x942kdf.o",
-                "providers/implementations/kdfs/liblegacy-lib-pbkdf1.o"
+                "providers/implementations/kdfs/liblegacy-lib-pbkdf1.o",
+                "providers/implementations/kdfs/liblegacy-lib-pvkkdf.o"
             ],
             "products" => {
                 "lib" => [
@@ -10110,13 +10700,22 @@ our %unified_info = (
         },
         "providers/implementations/kem" => {
             "deps" => [
+                "providers/implementations/kem/libdefault-lib-ec_kem.o",
+                "providers/implementations/kem/libdefault-lib-ecx_kem.o",
+                "providers/implementations/kem/libdefault-lib-kem_util.o",
+                "providers/implementations/kem/libdefault-lib-ml_kem_kem.o",
+                "providers/implementations/kem/libdefault-lib-mlx_kem.o",
                 "providers/implementations/kem/libdefault-lib-rsa_kem.o",
-                "providers/implementations/kem/libfips-lib-rsa_kem.o"
+                "providers/implementations/kem/libfips-lib-ml_kem_kem.o",
+                "providers/implementations/kem/libfips-lib-mlx_kem.o",
+                "providers/implementations/kem/libfips-lib-rsa_kem.o",
+                "providers/implementations/kem/libtemplate-lib-template_kem.o"
             ],
             "products" => {
                 "lib" => [
                     "providers/libdefault.a",
-                    "providers/libfips.a"
+                    "providers/libfips.a",
+                    "providers/libtemplate.a"
                 ]
             }
         },
@@ -10128,19 +10727,29 @@ our %unified_info = (
                 "providers/implementations/keymgmt/libdefault-lib-ecx_kmgmt.o",
                 "providers/implementations/keymgmt/libdefault-lib-kdf_legacy_kmgmt.o",
                 "providers/implementations/keymgmt/libdefault-lib-mac_legacy_kmgmt.o",
+                "providers/implementations/keymgmt/libdefault-lib-ml_dsa_kmgmt.o",
+                "providers/implementations/keymgmt/libdefault-lib-ml_kem_kmgmt.o",
+                "providers/implementations/keymgmt/libdefault-lib-mlx_kmgmt.o",
                 "providers/implementations/keymgmt/libdefault-lib-rsa_kmgmt.o",
+                "providers/implementations/keymgmt/libdefault-lib-slh_dsa_kmgmt.o",
                 "providers/implementations/keymgmt/libfips-lib-dh_kmgmt.o",
                 "providers/implementations/keymgmt/libfips-lib-dsa_kmgmt.o",
                 "providers/implementations/keymgmt/libfips-lib-ec_kmgmt.o",
                 "providers/implementations/keymgmt/libfips-lib-ecx_kmgmt.o",
                 "providers/implementations/keymgmt/libfips-lib-kdf_legacy_kmgmt.o",
                 "providers/implementations/keymgmt/libfips-lib-mac_legacy_kmgmt.o",
-                "providers/implementations/keymgmt/libfips-lib-rsa_kmgmt.o"
+                "providers/implementations/keymgmt/libfips-lib-ml_dsa_kmgmt.o",
+                "providers/implementations/keymgmt/libfips-lib-ml_kem_kmgmt.o",
+                "providers/implementations/keymgmt/libfips-lib-mlx_kmgmt.o",
+                "providers/implementations/keymgmt/libfips-lib-rsa_kmgmt.o",
+                "providers/implementations/keymgmt/libfips-lib-slh_dsa_kmgmt.o",
+                "providers/implementations/keymgmt/libtemplate-lib-template_kmgmt.o"
             ],
             "products" => {
                 "lib" => [
                     "providers/libdefault.a",
-                    "providers/libfips.a"
+                    "providers/libfips.a",
+                    "providers/libtemplate.a"
                 ]
             }
         },
@@ -10168,18 +10777,18 @@ our %unified_info = (
         },
         "providers/implementations/rands" => {
             "deps" => [
-                "providers/implementations/rands/libdefault-lib-crngt.o",
                 "providers/implementations/rands/libdefault-lib-drbg.o",
                 "providers/implementations/rands/libdefault-lib-drbg_ctr.o",
                 "providers/implementations/rands/libdefault-lib-drbg_hash.o",
                 "providers/implementations/rands/libdefault-lib-drbg_hmac.o",
                 "providers/implementations/rands/libdefault-lib-seed_src.o",
+                "providers/implementations/rands/libdefault-lib-seed_src_jitter.o",
                 "providers/implementations/rands/libdefault-lib-test_rng.o",
-                "providers/implementations/rands/libfips-lib-crngt.o",
                 "providers/implementations/rands/libfips-lib-drbg.o",
                 "providers/implementations/rands/libfips-lib-drbg_ctr.o",
                 "providers/implementations/rands/libfips-lib-drbg_hash.o",
                 "providers/implementations/rands/libfips-lib-drbg_hmac.o",
+                "providers/implementations/rands/libfips-lib-fips_crng_test.o",
                 "providers/implementations/rands/libfips-lib-test_rng.o"
             ],
             "products" => {
@@ -10191,7 +10800,7 @@ our %unified_info = (
         },
         "providers/implementations/rands/seeding" => {
             "deps" => [
-                "providers/implementations/rands/seeding/libdefault-lib-rand_cpu_x86.o",
+                "providers/implementations/rands/seeding/libdefault-lib-rand_cpu_arm64.o",
                 "providers/implementations/rands/seeding/libdefault-lib-rand_tsc.o",
                 "providers/implementations/rands/seeding/libdefault-lib-rand_unix.o",
                 "providers/implementations/rands/seeding/libdefault-lib-rand_win.o"
@@ -10208,13 +10817,31 @@ our %unified_info = (
                 "providers/implementations/signature/libdefault-lib-ecdsa_sig.o",
                 "providers/implementations/signature/libdefault-lib-eddsa_sig.o",
                 "providers/implementations/signature/libdefault-lib-mac_legacy_sig.o",
+                "providers/implementations/signature/libdefault-lib-ml_dsa_sig.o",
                 "providers/implementations/signature/libdefault-lib-rsa_sig.o",
+                "providers/implementations/signature/libdefault-lib-slh_dsa_sig.o",
                 "providers/implementations/signature/libdefault-lib-sm2_sig.o",
                 "providers/implementations/signature/libfips-lib-dsa_sig.o",
                 "providers/implementations/signature/libfips-lib-ecdsa_sig.o",
                 "providers/implementations/signature/libfips-lib-eddsa_sig.o",
                 "providers/implementations/signature/libfips-lib-mac_legacy_sig.o",
-                "providers/implementations/signature/libfips-lib-rsa_sig.o"
+                "providers/implementations/signature/libfips-lib-ml_dsa_sig.o",
+                "providers/implementations/signature/libfips-lib-rsa_sig.o",
+                "providers/implementations/signature/libfips-lib-slh_dsa_sig.o"
+            ],
+            "products" => {
+                "lib" => [
+                    "providers/libdefault.a",
+                    "providers/libfips.a"
+                ]
+            }
+        },
+        "providers/implementations/skeymgmt" => {
+            "deps" => [
+                "providers/implementations/skeymgmt/libdefault-lib-aes_skmgmt.o",
+                "providers/implementations/skeymgmt/libdefault-lib-generic.o",
+                "providers/implementations/skeymgmt/libfips-lib-aes_skmgmt.o",
+                "providers/implementations/skeymgmt/libfips-lib-generic.o"
             ],
             "products" => {
                 "lib" => [
@@ -10242,14 +10869,15 @@ our %unified_info = (
                 "ssl/libssl-lib-d1_srtp.o",
                 "ssl/libssl-lib-methods.o",
                 "ssl/libssl-lib-pqueue.o",
+                "ssl/libssl-lib-priority_queue.o",
                 "ssl/libssl-lib-s3_enc.o",
                 "ssl/libssl-lib-s3_lib.o",
                 "ssl/libssl-lib-s3_msg.o",
                 "ssl/libssl-lib-ssl_asn1.o",
                 "ssl/libssl-lib-ssl_cert.o",
+                "ssl/libssl-lib-ssl_cert_comp.o",
                 "ssl/libssl-lib-ssl_ciph.o",
                 "ssl/libssl-lib-ssl_conf.o",
-                "ssl/libssl-lib-ssl_err.o",
                 "ssl/libssl-lib-ssl_err_legacy.o",
                 "ssl/libssl-lib-ssl_init.o",
                 "ssl/libssl-lib-ssl_lib.o",
@@ -10265,32 +10893,107 @@ our %unified_info = (
                 "ssl/libssl-lib-t1_trce.o",
                 "ssl/libssl-lib-tls13_enc.o",
                 "ssl/libssl-lib-tls_depr.o",
-                "ssl/libssl-lib-tls_srp.o",
-                "ssl/libdefault-lib-s3_cbc.o",
-                "ssl/libfips-lib-s3_cbc.o"
+                "ssl/libssl-lib-tls_srp.o"
             ],
             "products" => {
                 "lib" => [
-                    "libssl",
-                    "providers/libdefault.a",
-                    "providers/libfips.a"
+                    "libssl"
+                ]
+            }
+        },
+        "ssl/quic" => {
+            "deps" => [
+                "ssl/quic/libssl-lib-cc_newreno.o",
+                "ssl/quic/libssl-lib-json_enc.o",
+                "ssl/quic/libssl-lib-qlog.o",
+                "ssl/quic/libssl-lib-qlog_event_helpers.o",
+                "ssl/quic/libssl-lib-quic_ackm.o",
+                "ssl/quic/libssl-lib-quic_cfq.o",
+                "ssl/quic/libssl-lib-quic_channel.o",
+                "ssl/quic/libssl-lib-quic_demux.o",
+                "ssl/quic/libssl-lib-quic_engine.o",
+                "ssl/quic/libssl-lib-quic_fc.o",
+                "ssl/quic/libssl-lib-quic_fifd.o",
+                "ssl/quic/libssl-lib-quic_impl.o",
+                "ssl/quic/libssl-lib-quic_lcidm.o",
+                "ssl/quic/libssl-lib-quic_method.o",
+                "ssl/quic/libssl-lib-quic_obj.o",
+                "ssl/quic/libssl-lib-quic_port.o",
+                "ssl/quic/libssl-lib-quic_rcidm.o",
+                "ssl/quic/libssl-lib-quic_reactor.o",
+                "ssl/quic/libssl-lib-quic_reactor_wait_ctx.o",
+                "ssl/quic/libssl-lib-quic_record_rx.o",
+                "ssl/quic/libssl-lib-quic_record_shared.o",
+                "ssl/quic/libssl-lib-quic_record_tx.o",
+                "ssl/quic/libssl-lib-quic_record_util.o",
+                "ssl/quic/libssl-lib-quic_rstream.o",
+                "ssl/quic/libssl-lib-quic_rx_depack.o",
+                "ssl/quic/libssl-lib-quic_sf_list.o",
+                "ssl/quic/libssl-lib-quic_srt_gen.o",
+                "ssl/quic/libssl-lib-quic_srtm.o",
+                "ssl/quic/libssl-lib-quic_sstream.o",
+                "ssl/quic/libssl-lib-quic_statm.o",
+                "ssl/quic/libssl-lib-quic_stream_map.o",
+                "ssl/quic/libssl-lib-quic_thread_assist.o",
+                "ssl/quic/libssl-lib-quic_tls.o",
+                "ssl/quic/libssl-lib-quic_tls_api.o",
+                "ssl/quic/libssl-lib-quic_trace.o",
+                "ssl/quic/libssl-lib-quic_tserver.o",
+                "ssl/quic/libssl-lib-quic_txp.o",
+                "ssl/quic/libssl-lib-quic_txpim.o",
+                "ssl/quic/libssl-lib-quic_types.o",
+                "ssl/quic/libssl-lib-quic_wire.o",
+                "ssl/quic/libssl-lib-quic_wire_pkt.o",
+                "ssl/quic/libssl-lib-uint_set.o"
+            ],
+            "products" => {
+                "lib" => [
+                    "libssl"
                 ]
             }
         },
         "ssl/record" => {
             "deps" => [
-                "ssl/record/libssl-lib-dtls1_bitmap.o",
                 "ssl/record/libssl-lib-rec_layer_d1.o",
-                "ssl/record/libssl-lib-rec_layer_s3.o",
-                "ssl/record/libssl-lib-ssl3_buffer.o",
-                "ssl/record/libssl-lib-ssl3_record.o",
-                "ssl/record/libssl-lib-ssl3_record_tls13.o",
-                "ssl/record/libcommon-lib-tls_pad.o"
+                "ssl/record/libssl-lib-rec_layer_s3.o"
+            ],
+            "products" => {
+                "lib" => [
+                    "libssl"
+                ]
+            }
+        },
+        "ssl/record/methods" => {
+            "deps" => [
+                "ssl/record/methods/libssl-lib-dtls_meth.o",
+                "ssl/record/methods/libssl-lib-ssl3_meth.o",
+                "ssl/record/methods/libssl-lib-tls13_meth.o",
+                "ssl/record/methods/libssl-lib-tls1_meth.o",
+                "ssl/record/methods/libssl-lib-tls_common.o",
+                "ssl/record/methods/libssl-lib-tls_multib.o",
+                "ssl/record/methods/libssl-lib-tlsany_meth.o",
+                "ssl/record/methods/libcommon-lib-tls_pad.o",
+                "ssl/record/methods/libdefault-lib-ssl3_cbc.o",
+                "ssl/record/methods/libfips-lib-ssl3_cbc.o"
             ],
             "products" => {
                 "lib" => [
                     "libssl",
-                    "providers/libcommon.a"
+                    "providers/libcommon.a",
+                    "providers/libdefault.a",
+                    "providers/libfips.a"
+                ]
+            }
+        },
+        "ssl/rio" => {
+            "deps" => [
+                "ssl/rio/libssl-lib-poll_builder.o",
+                "ssl/rio/libssl-lib-poll_immediate.o",
+                "ssl/rio/libssl-lib-rio_notifier.o"
+            ],
+            "products" => {
+                "lib" => [
+                    "libssl"
                 ]
             }
         },
@@ -10413,6 +11116,12 @@ our %unified_info = (
         }
     },
     "generate" => {
+        "OpenSSLConfig.cmake" => [
+            "exporters/cmake/OpenSSLConfig.cmake.in"
+        ],
+        "OpenSSLConfigVersion.cmake" => [
+            "exporters/cmake/OpenSSLConfigVersion.cmake.in"
+        ],
         "apps/progs.c" => [
             "apps/progs.pl",
             "\"-C\"",
@@ -10422,6 +11131,19 @@ our %unified_info = (
             "apps/progs.pl",
             "\"-H\"",
             "\$(APPS_OPENSSL)"
+        ],
+        "builddata.pm" => [
+            "util/mkinstallvars.pl",
+            "PREFIX=.",
+            "BINDIR=apps",
+            "APPLINKDIR=ms",
+            "LIBDIR=",
+            "INCLUDEDIR=include",
+            "\"INCLUDEDIR=\$(SRCDIR)/include\"",
+            "ENGINESDIR=engines",
+            "MODULESDIR=providers",
+            "\"VERSION=\$(VERSION)\"",
+            "\"LDLIBS=\$(LIB_EX_LIBS)\""
         ],
         "crypto/aes/aes-586.S" => [
             "crypto/aes/asm/aes-586.pl"
@@ -10443,6 +11165,24 @@ our %unified_info = (
         ],
         "crypto/aes/aes-ppc.s" => [
             "crypto/aes/asm/aes-ppc.pl"
+        ],
+        "crypto/aes/aes-riscv32-zkn.s" => [
+            "crypto/aes/asm/aes-riscv32-zkn.pl"
+        ],
+        "crypto/aes/aes-riscv64-zkn.s" => [
+            "crypto/aes/asm/aes-riscv64-zkn.pl"
+        ],
+        "crypto/aes/aes-riscv64-zvbb-zvkg-zvkned.s" => [
+            "crypto/aes/asm/aes-riscv64-zvbb-zvkg-zvkned.pl"
+        ],
+        "crypto/aes/aes-riscv64-zvkb-zvkned.s" => [
+            "crypto/aes/asm/aes-riscv64-zvkb-zvkned.pl"
+        ],
+        "crypto/aes/aes-riscv64-zvkned.s" => [
+            "crypto/aes/asm/aes-riscv64-zvkned.pl"
+        ],
+        "crypto/aes/aes-riscv64.s" => [
+            "crypto/aes/asm/aes-riscv64.pl"
         ],
         "crypto/aes/aes-s390x.S" => [
             "crypto/aes/asm/aes-s390x.pl"
@@ -10471,6 +11211,9 @@ our %unified_info = (
         "crypto/aes/aesni-x86_64.s" => [
             "crypto/aes/asm/aesni-x86_64.pl"
         ],
+        "crypto/aes/aesni-xts-avx512.s" => [
+            "crypto/aes/asm/aesni-xts-avx512.pl"
+        ],
         "crypto/aes/aesp8-ppc.s" => [
             "crypto/aes/asm/aesp8-ppc.pl"
         ],
@@ -10483,11 +11226,17 @@ our %unified_info = (
         "crypto/aes/bsaes-armv7.S" => [
             "crypto/aes/asm/bsaes-armv7.pl"
         ],
+        "crypto/aes/bsaes-armv8.S" => [
+            "crypto/aes/asm/bsaes-armv8.pl"
+        ],
         "crypto/aes/bsaes-x86_64.s" => [
             "crypto/aes/asm/bsaes-x86_64.pl"
         ],
         "crypto/aes/vpaes-armv8.S" => [
             "crypto/aes/asm/vpaes-armv8.pl"
+        ],
+        "crypto/aes/vpaes-loongarch64.S" => [
+            "crypto/aes/asm/vpaes-loongarch64.pl"
         ],
         "crypto/aes/vpaes-ppc.s" => [
             "crypto/aes/asm/vpaes-ppc.pl"
@@ -10549,14 +11298,32 @@ our %unified_info = (
         "crypto/bn/ppc-mont.s" => [
             "crypto/bn/asm/ppc-mont.pl"
         ],
+        "crypto/bn/ppc64-mont-fixed.s" => [
+            "crypto/bn/asm/ppc64-mont-fixed.pl"
+        ],
         "crypto/bn/ppc64-mont.s" => [
             "crypto/bn/asm/ppc64-mont.pl"
         ],
+        "crypto/bn/rsaz-2k-avx512.s" => [
+            "crypto/bn/asm/rsaz-2k-avx512.pl"
+        ],
+        "crypto/bn/rsaz-2k-avxifma.s" => [
+            "crypto/bn/asm/rsaz-2k-avxifma.pl"
+        ],
+        "crypto/bn/rsaz-3k-avx512.s" => [
+            "crypto/bn/asm/rsaz-3k-avx512.pl"
+        ],
+        "crypto/bn/rsaz-3k-avxifma.s" => [
+            "crypto/bn/asm/rsaz-3k-avxifma.pl"
+        ],
+        "crypto/bn/rsaz-4k-avx512.s" => [
+            "crypto/bn/asm/rsaz-4k-avx512.pl"
+        ],
+        "crypto/bn/rsaz-4k-avxifma.s" => [
+            "crypto/bn/asm/rsaz-4k-avxifma.pl"
+        ],
         "crypto/bn/rsaz-avx2.s" => [
             "crypto/bn/asm/rsaz-avx2.pl"
-        ],
-        "crypto/bn/rsaz-avx512.s" => [
-            "crypto/bn/asm/rsaz-avx512.pl"
         ],
         "crypto/bn/rsaz-x86_64.s" => [
             "crypto/bn/asm/rsaz-x86_64.pl"
@@ -10619,6 +11386,9 @@ our %unified_info = (
         "crypto/chacha/chacha-armv4.S" => [
             "crypto/chacha/asm/chacha-armv4.pl"
         ],
+        "crypto/chacha/chacha-armv8-sve.S" => [
+            "crypto/chacha/asm/chacha-armv8-sve.pl"
+        ],
         "crypto/chacha/chacha-armv8.S" => [
             "crypto/chacha/asm/chacha-armv8.pl"
         ],
@@ -10631,8 +11401,18 @@ our %unified_info = (
         "crypto/chacha/chacha-ia64.s" => [
             "crypto/chacha/chacha-ia64.S"
         ],
+        "crypto/chacha/chacha-loongarch64.S" => [
+            "crypto/chacha/asm/chacha-loongarch64.pl"
+        ],
         "crypto/chacha/chacha-ppc.s" => [
             "crypto/chacha/asm/chacha-ppc.pl"
+        ],
+        "crypto/chacha/chacha-riscv64-v-zbb-zvkb.s" => [
+            "crypto/chacha/asm/chacha-riscv64-v-zbb.pl",
+            "zvkb"
+        ],
+        "crypto/chacha/chacha-riscv64-v-zbb.s" => [
+            "crypto/chacha/asm/chacha-riscv64-v-zbb.pl"
         ],
         "crypto/chacha/chacha-s390x.S" => [
             "crypto/chacha/asm/chacha-s390x.pl"
@@ -10642,6 +11422,9 @@ our %unified_info = (
         ],
         "crypto/chacha/chacha-x86_64.s" => [
             "crypto/chacha/asm/chacha-x86_64.pl"
+        ],
+        "crypto/chacha/chachap10-ppc.s" => [
+            "crypto/chacha/asm/chachap10-ppc.pl"
         ],
         "crypto/des/crypt586.S" => [
             "crypto/des/asm/crypt586.pl"
@@ -10654,6 +11437,9 @@ our %unified_info = (
         ],
         "crypto/des/dest4-sparcv9.S" => [
             "crypto/des/asm/dest4-sparcv9.pl"
+        ],
+        "crypto/ec/ecp_nistp384-ppc64.s" => [
+            "crypto/ec/asm/ecp_nistp384-ppc64.pl"
         ],
         "crypto/ec/ecp_nistp521-ppc64.s" => [
             "crypto/ec/asm/ecp_nistp521-ppc64.pl"
@@ -10679,6 +11465,9 @@ our %unified_info = (
         "crypto/ec/ecp_nistz256-x86_64.s" => [
             "crypto/ec/asm/ecp_nistz256-x86_64.pl"
         ],
+        "crypto/ec/ecp_sm2p256-armv8.S" => [
+            "crypto/ec/asm/ecp_sm2p256-armv8.pl"
+        ],
         "crypto/ec/x25519-ppc64.s" => [
             "crypto/ec/asm/x25519-ppc64.pl"
         ],
@@ -10688,8 +11477,17 @@ our %unified_info = (
         "crypto/ia64cpuid.s" => [
             "crypto/ia64cpuid.S"
         ],
+        "crypto/loongarch64cpuid.s" => [
+            "crypto/loongarch64cpuid.pl"
+        ],
         "crypto/md5/md5-586.S" => [
             "crypto/md5/asm/md5-586.pl"
+        ],
+        "crypto/md5/md5-aarch64.S" => [
+            "crypto/md5/asm/md5-aarch64.pl"
+        ],
+        "crypto/md5/md5-loongarch64.S" => [
+            "crypto/md5/asm/md5-loongarch64.pl"
         ],
         "crypto/md5/md5-sparcv9.S" => [
             "crypto/md5/asm/md5-sparcv9.pl"
@@ -10697,8 +11495,20 @@ our %unified_info = (
         "crypto/md5/md5-x86_64.s" => [
             "crypto/md5/asm/md5-x86_64.pl"
         ],
+        "crypto/modes/aes-gcm-armv8-unroll8_64.S" => [
+            "crypto/modes/asm/aes-gcm-armv8-unroll8_64.pl"
+        ],
         "crypto/modes/aes-gcm-armv8_64.S" => [
             "crypto/modes/asm/aes-gcm-armv8_64.pl"
+        ],
+        "crypto/modes/aes-gcm-avx512.s" => [
+            "crypto/modes/asm/aes-gcm-avx512.pl"
+        ],
+        "crypto/modes/aes-gcm-ppc.s" => [
+            "crypto/modes/asm/aes-gcm-ppc.pl"
+        ],
+        "crypto/modes/aes-gcm-riscv64-zvkb-zvkg-zvkned.s" => [
+            "crypto/modes/asm/aes-gcm-riscv64-zvkb-zvkg-zvkned.pl"
         ],
         "crypto/modes/aesni-gcm-x86_64.s" => [
             "crypto/modes/asm/aesni-gcm-x86_64.pl"
@@ -10718,6 +11528,15 @@ our %unified_info = (
         "crypto/modes/ghash-parisc.s" => [
             "crypto/modes/asm/ghash-parisc.pl"
         ],
+        "crypto/modes/ghash-riscv64-zvkb-zvbc.s" => [
+            "crypto/modes/asm/ghash-riscv64-zvkb-zvbc.pl"
+        ],
+        "crypto/modes/ghash-riscv64-zvkg.s" => [
+            "crypto/modes/asm/ghash-riscv64-zvkg.pl"
+        ],
+        "crypto/modes/ghash-riscv64.s" => [
+            "crypto/modes/asm/ghash-riscv64.pl"
+        ],
         "crypto/modes/ghash-s390x.S" => [
             "crypto/modes/asm/ghash-s390x.pl"
         ],
@@ -10735,6 +11554,9 @@ our %unified_info = (
         ],
         "crypto/modes/ghashv8-armx.S" => [
             "crypto/modes/asm/ghashv8-armx.pl"
+        ],
+        "crypto/params_idx.c" => [
+            "crypto/params_idx.c.in"
         ],
         "crypto/pariscid.s" => [
             "crypto/pariscid.pl"
@@ -10795,6 +11617,12 @@ our %unified_info = (
         ],
         "crypto/ripemd/rmd-586.S" => [
             "crypto/ripemd/asm/rmd-586.pl"
+        ],
+        "crypto/riscv32cpuid.s" => [
+            "crypto/riscv32cpuid.pl"
+        ],
+        "crypto/riscv64cpuid.s" => [
+            "crypto/riscv64cpuid.pl"
         ],
         "crypto/s390xcpuid.S" => [
             "crypto/s390xcpuid.pl"
@@ -10904,6 +11732,9 @@ our %unified_info = (
         "crypto/sha/sha256-ppc.s" => [
             "crypto/sha/asm/sha512-ppc.pl"
         ],
+        "crypto/sha/sha256-riscv64-zvkb-zvknha_or_zvknhb.S" => [
+            "crypto/sha/asm/sha256-riscv64-zvkb-zvknha_or_zvknhb.pl"
+        ],
         "crypto/sha/sha256-s390x.S" => [
             "crypto/sha/asm/sha512-s390x.pl"
         ],
@@ -10940,6 +11771,9 @@ our %unified_info = (
         "crypto/sha/sha512-ppc.s" => [
             "crypto/sha/asm/sha512-ppc.pl"
         ],
+        "crypto/sha/sha512-riscv64-zvkb-zvknhb.S" => [
+            "crypto/sha/asm/sha512-riscv64-zvkb-zvknhb.pl"
+        ],
         "crypto/sha/sha512-s390x.S" => [
             "crypto/sha/asm/sha512-s390x.pl"
         ],
@@ -10951,6 +11785,24 @@ our %unified_info = (
         ],
         "crypto/sha/sha512p8-ppc.s" => [
             "crypto/sha/asm/sha512p8-ppc.pl"
+        ],
+        "crypto/sm3/sm3-armv8.S" => [
+            "crypto/sm3/asm/sm3-armv8.pl"
+        ],
+        "crypto/sm3/sm3-riscv64-zvksh.S" => [
+            "crypto/sm3/asm/sm3-riscv64-zvksh.pl"
+        ],
+        "crypto/sm4/sm4-armv8.S" => [
+            "crypto/sm4/asm/sm4-armv8.pl"
+        ],
+        "crypto/sm4/sm4-riscv64-zvksed.s" => [
+            "crypto/sm4/asm/sm4-riscv64-zvksed.pl"
+        ],
+        "crypto/sm4/vpsm4-armv8.S" => [
+            "crypto/sm4/asm/vpsm4-armv8.pl"
+        ],
+        "crypto/sm4/vpsm4_ex-armv8.S" => [
+            "crypto/sm4/asm/vpsm4_ex-armv8.pl"
         ],
         "crypto/uplink-ia64.s" => [
             "ms/uplink-ia64.pl"
@@ -15923,11 +16775,29 @@ our %unified_info = (
         "engines/e_padlock-x86_64.s" => [
             "engines/asm/e_padlock-x86_64.pl"
         ],
+        "exporters/OpenSSLConfig.cmake" => [
+            "exporters/cmake/OpenSSLConfig.cmake.in"
+        ],
+        "exporters/OpenSSLConfigVersion.cmake" => [
+            "exporters/cmake/OpenSSLConfigVersion.cmake.in"
+        ],
+        "exporters/libcrypto.pc" => [
+            "exporters/pkg-config/libcrypto.pc.in"
+        ],
+        "exporters/libssl.pc" => [
+            "exporters/pkg-config/libssl.pc.in"
+        ],
+        "exporters/openssl.pc" => [
+            "exporters/pkg-config/openssl.pc.in"
+        ],
         "include/crypto/bn_conf.h" => [
             "include/crypto/bn_conf.h.in"
         ],
         "include/crypto/dso_conf.h" => [
             "include/crypto/dso_conf.h.in"
+        ],
+        "include/internal/param_names.h" => [
+            "include/internal/param_names.h.in"
         ],
         "include/openssl/asn1.h" => [
             "include/openssl/asn1.h.in"
@@ -15944,11 +16814,17 @@ our %unified_info = (
         "include/openssl/cms.h" => [
             "include/openssl/cms.h.in"
         ],
+        "include/openssl/comp.h" => [
+            "include/openssl/comp.h.in"
+        ],
         "include/openssl/conf.h" => [
             "include/openssl/conf.h.in"
         ],
         "include/openssl/configuration.h" => [
             "include/openssl/configuration.h.in"
+        ],
+        "include/openssl/core_names.h" => [
+            "include/openssl/core_names.h.in"
         ],
         "include/openssl/crmf.h" => [
             "include/openssl/crmf.h.in"
@@ -15998,19 +16874,46 @@ our %unified_info = (
         "include/openssl/x509.h" => [
             "include/openssl/x509.h.in"
         ],
+        "include/openssl/x509_acert.h" => [
+            "include/openssl/x509_acert.h.in"
+        ],
         "include/openssl/x509_vfy.h" => [
             "include/openssl/x509_vfy.h.in"
         ],
         "include/openssl/x509v3.h" => [
             "include/openssl/x509v3.h.in"
         ],
+        "installdata.pm" => [
+            "util/mkinstallvars.pl",
+            "\"PREFIX=\$(INSTALLTOP)\"",
+            "BINDIR=bin",
+            "\"LIBDIR=\$(LIBDIR)\"",
+            "\"libdir=\$(libdir)\"",
+            "INCLUDEDIR=include",
+            "APPLINKDIR=include/openssl",
+            "\"ENGINESDIR=\$(ENGINESDIR)\"",
+            "\"MODULESDIR=\$(MODULESDIR)\"",
+            "\"PKGCONFIGDIR=\$(PKGCONFIGDIR)\"",
+            "\"CMAKECONFIGDIR=\$(CMAKECONFIGDIR)\"",
+            "\"LDLIBS=\$(LIB_EX_LIBS)\"",
+            "\"VERSION=\$(VERSION)\""
+        ],
         "libcrypto.ld" => [
             "util/libcrypto.num",
             "libcrypto"
         ],
+        "libcrypto.pc" => [
+            "exporters/pkg-config/libcrypto.pc.in"
+        ],
         "libssl.ld" => [
             "util/libssl.num",
             "libssl"
+        ],
+        "libssl.pc" => [
+            "exporters/pkg-config/libssl.pc.in"
+        ],
+        "openssl.pc" => [
+            "exporters/pkg-config/openssl.pc.in"
         ],
         "providers/common/der/der_digests_gen.c" => [
             "providers/common/der/der_digests_gen.c.in"
@@ -16024,8 +16927,14 @@ our %unified_info = (
         "providers/common/der/der_ecx_gen.c" => [
             "providers/common/der/der_ecx_gen.c.in"
         ],
+        "providers/common/der/der_ml_dsa_gen.c" => [
+            "providers/common/der/der_ml_dsa_gen.c.in"
+        ],
         "providers/common/der/der_rsa_gen.c" => [
             "providers/common/der/der_rsa_gen.c.in"
+        ],
+        "providers/common/der/der_slh_dsa_gen.c" => [
+            "providers/common/der/der_slh_dsa_gen.c.in"
         ],
         "providers/common/der/der_sm2_gen.c" => [
             "providers/common/der/der_sm2_gen.c.in"
@@ -16045,8 +16954,14 @@ our %unified_info = (
         "providers/common/include/prov/der_ecx.h" => [
             "providers/common/include/prov/der_ecx.h.in"
         ],
+        "providers/common/include/prov/der_ml_dsa.h" => [
+            "providers/common/include/prov/der_ml_dsa.h.in"
+        ],
         "providers/common/include/prov/der_rsa.h" => [
             "providers/common/include/prov/der_rsa.h.in"
+        ],
+        "providers/common/include/prov/der_slh_dsa.h" => [
+            "providers/common/include/prov/der_slh_dsa.h.in"
         ],
         "providers/common/include/prov/der_sm2.h" => [
             "providers/common/include/prov/der_sm2.h.in"
@@ -16089,6 +17004,10 @@ our %unified_info = (
             "test/generate_buildtest.pl",
             "buffer"
         ],
+        "test/buildtest_byteorder.c" => [
+            "test/generate_buildtest.pl",
+            "byteorder"
+        ],
         "test/buildtest_camellia.c" => [
             "test/generate_buildtest.pl",
             "camellia"
@@ -16121,10 +17040,6 @@ our %unified_info = (
             "test/generate_buildtest.pl",
             "core_dispatch"
         ],
-        "test/buildtest_core_names.c" => [
-            "test/generate_buildtest.pl",
-            "core_names"
-        ],
         "test/buildtest_core_object.c" => [
             "test/generate_buildtest.pl",
             "core_object"
@@ -16156,6 +17071,10 @@ our %unified_info = (
         "test/buildtest_e_os2.c" => [
             "test/generate_buildtest.pl",
             "e_os2"
+        ],
+        "test/buildtest_e_ostime.c" => [
+            "test/generate_buildtest.pl",
+            "e_ostime"
         ],
         "test/buildtest_ebcdic.c" => [
             "test/generate_buildtest.pl",
@@ -16193,6 +17112,10 @@ our %unified_info = (
             "test/generate_buildtest.pl",
             "hmac"
         ],
+        "test/buildtest_hpke.c" => [
+            "test/generate_buildtest.pl",
+            "hpke"
+        ],
         "test/buildtest_http.c" => [
             "test/generate_buildtest.pl",
             "http"
@@ -16200,6 +17123,10 @@ our %unified_info = (
         "test/buildtest_idea.c" => [
             "test/generate_buildtest.pl",
             "idea"
+        ],
+        "test/buildtest_indicator.c" => [
+            "test/generate_buildtest.pl",
+            "indicator"
         ],
         "test/buildtest_kdf.c" => [
             "test/generate_buildtest.pl",
@@ -16220,6 +17147,10 @@ our %unified_info = (
         "test/buildtest_mdc2.c" => [
             "test/generate_buildtest.pl",
             "mdc2"
+        ],
+        "test/buildtest_ml_kem.c" => [
+            "test/generate_buildtest.pl",
+            "ml_kem"
         ],
         "test/buildtest_modes.c" => [
             "test/generate_buildtest.pl",
@@ -16260,6 +17191,10 @@ our %unified_info = (
         "test/buildtest_provider.c" => [
             "test/generate_buildtest.pl",
             "provider"
+        ],
+        "test/buildtest_quic.c" => [
+            "test/generate_buildtest.pl",
+            "quic"
         ],
         "test/buildtest_rand.c" => [
             "test/generate_buildtest.pl",
@@ -16316,6 +17251,10 @@ our %unified_info = (
         "test/buildtest_symhacks.c" => [
             "test/generate_buildtest.pl",
             "symhacks"
+        ],
+        "test/buildtest_thread.c" => [
+            "test/generate_buildtest.pl",
+            "thread"
         ],
         "test/buildtest_tls1.c" => [
             "test/generate_buildtest.pl",
@@ -17165,6 +18104,12 @@ our %unified_info = (
         ]
     },
     "includes" => {
+        "OpenSSLConfig.cmake" => [
+            "."
+        ],
+        "OpenSSLConfigVersion.cmake" => [
+            "."
+        ],
         "apps/asn1parse.o" => [
             "apps"
         ],
@@ -17397,6 +18342,9 @@ our %unified_info = (
         "apps/openssl-bin-sess_id.o" => [
             "apps"
         ],
+        "apps/openssl-bin-skeyutl.o" => [
+            "apps"
+        ],
         "apps/openssl-bin-smime.o" => [
             "apps"
         ],
@@ -17484,6 +18432,9 @@ our %unified_info = (
         "apps/sess_id.o" => [
             "apps"
         ],
+        "apps/skeyutl.o" => [
+            "apps"
+        ],
         "apps/smime.o" => [
             "apps"
         ],
@@ -17538,7 +18489,19 @@ our %unified_info = (
         "crypto/aes/libcrypto-lib-aesv8-armx.o" => [
             "crypto"
         ],
+        "crypto/aes/libcrypto-lib-vpaes-armv8.o" => [
+            "crypto"
+        ],
         "crypto/aes/libfips-lib-aesv8-armx.o" => [
+            "crypto"
+        ],
+        "crypto/aes/libfips-lib-vpaes-armv8.o" => [
+            "crypto"
+        ],
+        "crypto/aes/vpaes-armv8.o" => [
+            "crypto"
+        ],
+        "crypto/aes/vpaes-loongarch64.o" => [
             "crypto"
         ],
         "crypto/arm64cpuid.o" => [
@@ -17598,10 +18561,19 @@ our %unified_info = (
         "crypto/chacha/chacha-armv4.o" => [
             "crypto"
         ],
+        "crypto/chacha/chacha-armv8-sve.o" => [
+            "crypto"
+        ],
         "crypto/chacha/chacha-armv8.o" => [
             "crypto"
         ],
+        "crypto/chacha/chacha-loongarch64.o" => [
+            "crypto"
+        ],
         "crypto/chacha/chacha-s390x.o" => [
+            "crypto"
+        ],
+        "crypto/chacha/libcrypto-lib-chacha-armv8-sve.o" => [
             "crypto"
         ],
         "crypto/chacha/libcrypto-lib-chacha-armv8.o" => [
@@ -17628,6 +18600,12 @@ our %unified_info = (
         "crypto/ec/ecp_s390x_nistp.o" => [
             "crypto"
         ],
+        "crypto/ec/ecp_sm2p256-armv8.o" => [
+            "crypto"
+        ],
+        "crypto/ec/ecx_key.o" => [
+            "crypto"
+        ],
         "crypto/ec/ecx_meth.o" => [
             "crypto"
         ],
@@ -17637,10 +18615,22 @@ our %unified_info = (
         "crypto/ec/libcrypto-lib-ecp_nistz256-armv8.o" => [
             "crypto"
         ],
+        "crypto/ec/libcrypto-lib-ecp_sm2p256-armv8.o" => [
+            "crypto"
+        ],
+        "crypto/ec/libcrypto-lib-ecx_key.o" => [
+            "crypto"
+        ],
         "crypto/ec/libcrypto-lib-ecx_meth.o" => [
             "crypto"
         ],
         "crypto/ec/libfips-lib-ecp_nistz256-armv8.o" => [
+            "crypto"
+        ],
+        "crypto/ec/libfips-lib-ecp_sm2p256-armv8.o" => [
+            "crypto"
+        ],
+        "crypto/ec/libfips-lib-ecx_key.o" => [
             "crypto"
         ],
         "crypto/evp/e_aes.o" => [
@@ -17720,7 +18710,19 @@ our %unified_info = (
         "crypto/libfips-lib-cpuid.o" => [
             "."
         ],
+        "crypto/md5/libcrypto-lib-md5-aarch64.o" => [
+            "crypto"
+        ],
+        "crypto/md5/md5-aarch64.o" => [
+            "crypto"
+        ],
+        "crypto/md5/md5-loongarch64.o" => [
+            "crypto"
+        ],
         "crypto/md5/md5-sparcv9.o" => [
+            "crypto"
+        ],
+        "crypto/modes/aes-gcm-armv8-unroll8_64.o" => [
             "crypto"
         ],
         "crypto/modes/aes-gcm-armv8_64.o" => [
@@ -17741,6 +18743,9 @@ our %unified_info = (
         "crypto/modes/ghashv8-armx.o" => [
             "crypto"
         ],
+        "crypto/modes/libcrypto-lib-aes-gcm-armv8-unroll8_64.o" => [
+            "crypto"
+        ],
         "crypto/modes/libcrypto-lib-aes-gcm-armv8_64.o" => [
             "crypto"
         ],
@@ -17748,6 +18753,9 @@ our %unified_info = (
             "crypto"
         ],
         "crypto/modes/libcrypto-lib-ghashv8-armx.o" => [
+            "crypto"
+        ],
+        "crypto/modes/libfips-lib-aes-gcm-armv8-unroll8_64.o" => [
             "crypto"
         ],
         "crypto/modes/libfips-lib-aes-gcm-armv8_64.o" => [
@@ -17758,6 +18766,9 @@ our %unified_info = (
         ],
         "crypto/modes/libfips-lib-ghashv8-armx.o" => [
             "crypto"
+        ],
+        "crypto/params_idx.c" => [
+            "util/perl"
         ],
         "crypto/poly1305/libcrypto-lib-poly1305-armv8.o" => [
             "crypto"
@@ -17783,6 +18794,12 @@ our %unified_info = (
         "crypto/sha/keccak1600-armv4.o" => [
             "crypto"
         ],
+        "crypto/sha/keccak1600-armv8.o" => [
+            "crypto"
+        ],
+        "crypto/sha/libcrypto-lib-keccak1600-armv8.o" => [
+            "crypto"
+        ],
         "crypto/sha/libcrypto-lib-sha1-armv8.o" => [
             "crypto"
         ],
@@ -17790,6 +18807,9 @@ our %unified_info = (
             "crypto"
         ],
         "crypto/sha/libcrypto-lib-sha512-armv8.o" => [
+            "crypto"
+        ],
+        "crypto/sha/libfips-lib-keccak1600-armv8.o" => [
             "crypto"
         ],
         "crypto/sha/libfips-lib-sha1-armv8.o" => [
@@ -17844,6 +18864,30 @@ our %unified_info = (
             "crypto"
         ],
         "crypto/sha/sha512-sparcv9.o" => [
+            "crypto"
+        ],
+        "crypto/sm3/libcrypto-lib-sm3-armv8.o" => [
+            "crypto"
+        ],
+        "crypto/sm3/sm3-armv8.o" => [
+            "crypto"
+        ],
+        "crypto/sm4/libcrypto-lib-sm4-armv8.o" => [
+            "crypto"
+        ],
+        "crypto/sm4/libcrypto-lib-vpsm4-armv8.o" => [
+            "crypto"
+        ],
+        "crypto/sm4/libcrypto-lib-vpsm4_ex-armv8.o" => [
+            "crypto"
+        ],
+        "crypto/sm4/sm4-armv8.o" => [
+            "crypto"
+        ],
+        "crypto/sm4/vpsm4-armv8.o" => [
+            "crypto"
+        ],
+        "crypto/sm4/vpsm4_ex-armv8.o" => [
             "crypto"
         ],
         "doc/man1/openssl-asn1parse.pod" => [
@@ -18005,6 +19049,24 @@ our %unified_info = (
         "doc/man1/openssl-x509.pod" => [
             "doc"
         ],
+        "exporters/OpenSSLConfig.cmake" => [
+            "."
+        ],
+        "exporters/OpenSSLConfigVersion.cmake" => [
+            "."
+        ],
+        "exporters/libcrypto.pc" => [
+            "."
+        ],
+        "exporters/libssl.pc" => [
+            "."
+        ],
+        "exporters/openssl.pc" => [
+            "."
+        ],
+        "fuzz/acert-test" => [
+            "include"
+        ],
         "fuzz/asn1-test" => [
             "include"
         ],
@@ -18035,11 +19097,68 @@ our %unified_info = (
         "fuzz/ct-test" => [
             "include"
         ],
+        "fuzz/decoder-test" => [
+            "include"
+        ],
+        "fuzz/dtlsclient-test" => [
+            "include"
+        ],
+        "fuzz/dtlsserver-test" => [
+            "include"
+        ],
+        "fuzz/hashtable-test" => [
+            "include"
+        ],
+        "fuzz/ml-dsa-test" => [
+            "include"
+        ],
+        "fuzz/ml-kem-test" => [
+            "include"
+        ],
+        "fuzz/pem-test" => [
+            "include"
+        ],
+        "fuzz/provider-test" => [
+            "include"
+        ],
+        "fuzz/punycode-test" => [
+            "include"
+        ],
+        "fuzz/quic-client-test" => [
+            "include"
+        ],
+        "fuzz/quic-lcidm-test" => [
+            "include"
+        ],
+        "fuzz/quic-rcidm-test" => [
+            "include"
+        ],
+        "fuzz/quic-server-test" => [
+            "include"
+        ],
+        "fuzz/quic-srtm-test" => [
+            "include"
+        ],
         "fuzz/server-test" => [
+            "include"
+        ],
+        "fuzz/slh-dsa-test" => [
+            "include"
+        ],
+        "fuzz/smime-test" => [
+            "include"
+        ],
+        "fuzz/v3name-test" => [
             "include"
         ],
         "fuzz/x509-test" => [
             "include"
+        ],
+        "include/internal/param_names.h" => [
+            "util/perl"
+        ],
+        "include/openssl/core_names.h" => [
+            "util/perl"
         ],
         "libcrypto" => [
             ".",
@@ -18051,6 +19170,9 @@ our %unified_info = (
             ".",
             "util/perl/OpenSSL"
         ],
+        "libcrypto.pc" => [
+            "."
+        ],
         "libssl" => [
             ".",
             "include"
@@ -18058,6 +19180,12 @@ our %unified_info = (
         "libssl.ld" => [
             ".",
             "util/perl/OpenSSL"
+        ],
+        "libssl.pc" => [
+            "."
+        ],
+        "openssl.pc" => [
+            "."
         ],
         "providers/common/der/der_digests_gen.c" => [
             "providers/common/der"
@@ -18098,6 +19226,15 @@ our %unified_info = (
         "providers/common/der/der_ecx_key.o" => [
             "providers/common/include/prov"
         ],
+        "providers/common/der/der_ml_dsa_gen.c" => [
+            "providers/common/der"
+        ],
+        "providers/common/der/der_ml_dsa_gen.o" => [
+            "providers/common/include/prov"
+        ],
+        "providers/common/der/der_ml_dsa_key.o" => [
+            "providers/common/include/prov"
+        ],
         "providers/common/der/der_rsa_gen.c" => [
             "providers/common/der"
         ],
@@ -18108,6 +19245,15 @@ our %unified_info = (
             "providers/common/include/prov"
         ],
         "providers/common/der/der_rsa_sig.o" => [
+            "providers/common/include/prov"
+        ],
+        "providers/common/der/der_slh_dsa_gen.c" => [
+            "providers/common/der"
+        ],
+        "providers/common/der/der_slh_dsa_gen.o" => [
+            "providers/common/include/prov"
+        ],
+        "providers/common/der/der_slh_dsa_key.o" => [
             "providers/common/include/prov"
         ],
         "providers/common/der/der_sm2_gen.c" => [
@@ -18155,10 +19301,22 @@ our %unified_info = (
         "providers/common/der/libcommon-lib-der_ecx_key.o" => [
             "providers/common/include/prov"
         ],
+        "providers/common/der/libcommon-lib-der_ml_dsa_gen.o" => [
+            "providers/common/include/prov"
+        ],
+        "providers/common/der/libcommon-lib-der_ml_dsa_key.o" => [
+            "providers/common/include/prov"
+        ],
         "providers/common/der/libcommon-lib-der_rsa_gen.o" => [
             "providers/common/include/prov"
         ],
         "providers/common/der/libcommon-lib-der_rsa_key.o" => [
+            "providers/common/include/prov"
+        ],
+        "providers/common/der/libcommon-lib-der_slh_dsa_gen.o" => [
+            "providers/common/include/prov"
+        ],
+        "providers/common/der/libcommon-lib-der_slh_dsa_key.o" => [
             "providers/common/include/prov"
         ],
         "providers/common/der/libcommon-lib-der_wrap_gen.o" => [
@@ -18191,7 +19349,13 @@ our %unified_info = (
         "providers/common/include/prov/der_ecx.h" => [
             "providers/common/der"
         ],
+        "providers/common/include/prov/der_ml_dsa.h" => [
+            "providers/common/der"
+        ],
         "providers/common/include/prov/der_rsa.h" => [
+            "providers/common/der"
+        ],
+        "providers/common/include/prov/der_slh_dsa.h" => [
             "providers/common/der"
         ],
         "providers/common/include/prov/der_sm2.h" => [
@@ -18236,7 +19400,13 @@ our %unified_info = (
         "providers/implementations/signature/libdefault-lib-eddsa_sig.o" => [
             "providers/common/include/prov"
         ],
+        "providers/implementations/signature/libdefault-lib-ml_dsa_sig.o" => [
+            "providers/common/include/prov"
+        ],
         "providers/implementations/signature/libdefault-lib-rsa_sig.o" => [
+            "providers/common/include/prov"
+        ],
+        "providers/implementations/signature/libdefault-lib-slh_dsa_sig.o" => [
             "providers/common/include/prov"
         ],
         "providers/implementations/signature/libdefault-lib-sm2_sig.o" => [
@@ -18251,10 +19421,22 @@ our %unified_info = (
         "providers/implementations/signature/libfips-lib-eddsa_sig.o" => [
             "providers/common/include/prov"
         ],
+        "providers/implementations/signature/libfips-lib-ml_dsa_sig.o" => [
+            "providers/common/include/prov"
+        ],
         "providers/implementations/signature/libfips-lib-rsa_sig.o" => [
             "providers/common/include/prov"
         ],
+        "providers/implementations/signature/libfips-lib-slh_dsa_sig.o" => [
+            "providers/common/include/prov"
+        ],
+        "providers/implementations/signature/ml_dsa_sig.o" => [
+            "providers/common/include/prov"
+        ],
         "providers/implementations/signature/rsa_sig.o" => [
+            "providers/common/include/prov"
+        ],
+        "providers/implementations/signature/slh_dsa_sig.o" => [
             "providers/common/include/prov"
         ],
         "providers/implementations/signature/sm2_sig.o" => [
@@ -18269,28 +19451,39 @@ our %unified_info = (
             "crypto",
             "include",
             "providers/implementations/include",
-            "providers/common/include"
+            "providers/common/include",
+            "providers/fips/include"
         ],
         "providers/libdefault.a" => [
             ".",
             "crypto",
             "include",
             "providers/implementations/include",
-            "providers/common/include"
+            "providers/common/include",
+            "providers/fips/include"
         ],
         "providers/libfips.a" => [
             ".",
             "crypto",
             "include",
             "providers/implementations/include",
-            "providers/common/include"
+            "providers/common/include",
+            "providers/fips/include"
         ],
         "providers/liblegacy.a" => [
             ".",
             "crypto",
             "include",
             "providers/implementations/include",
-            "providers/common/include"
+            "providers/common/include",
+            "providers/fips/include"
+        ],
+        "providers/libtemplate.a" => [
+            "crypto",
+            "include",
+            "providers/implementations/include",
+            "providers/common/include",
+            "providers/fips/include"
         ],
         "test/aborttest" => [
             "include",
@@ -18417,6 +19610,9 @@ our %unified_info = (
         "test/buildtest_c_buffer" => [
             "include"
         ],
+        "test/buildtest_c_byteorder" => [
+            "include"
+        ],
         "test/buildtest_c_camellia" => [
             "include"
         ],
@@ -18441,9 +19637,6 @@ our %unified_info = (
         "test/buildtest_c_core_dispatch" => [
             "include"
         ],
-        "test/buildtest_c_core_names" => [
-            "include"
-        ],
         "test/buildtest_c_core_object" => [
             "include"
         ],
@@ -18466,6 +19659,9 @@ our %unified_info = (
             "include"
         ],
         "test/buildtest_c_e_os2" => [
+            "include"
+        ],
+        "test/buildtest_c_e_ostime" => [
             "include"
         ],
         "test/buildtest_c_ebcdic" => [
@@ -18495,10 +19691,16 @@ our %unified_info = (
         "test/buildtest_c_hmac" => [
             "include"
         ],
+        "test/buildtest_c_hpke" => [
+            "include"
+        ],
         "test/buildtest_c_http" => [
             "include"
         ],
         "test/buildtest_c_idea" => [
+            "include"
+        ],
+        "test/buildtest_c_indicator" => [
             "include"
         ],
         "test/buildtest_c_kdf" => [
@@ -18514,6 +19716,9 @@ our %unified_info = (
             "include"
         ],
         "test/buildtest_c_mdc2" => [
+            "include"
+        ],
+        "test/buildtest_c_ml_kem" => [
             "include"
         ],
         "test/buildtest_c_modes" => [
@@ -18544,6 +19749,9 @@ our %unified_info = (
             "include"
         ],
         "test/buildtest_c_provider" => [
+            "include"
+        ],
+        "test/buildtest_c_quic" => [
             "include"
         ],
         "test/buildtest_c_rand" => [
@@ -18586,6 +19794,9 @@ our %unified_info = (
             "include"
         ],
         "test/buildtest_c_symhacks" => [
+            "include"
+        ],
+        "test/buildtest_c_thread" => [
             "include"
         ],
         "test/buildtest_c_tls1" => [
@@ -19401,6 +20612,7 @@ our %unified_info = (
         "providers/libdefault.a",
         "providers/libfips.a",
         "providers/liblegacy.a",
+        "providers/libtemplate.a",
         "test/libtestutil.a"
     ],
     "mandocs" => {
@@ -20218,6 +21430,7 @@ our %unified_info = (
     ],
     "programs" => [
         "apps/openssl",
+        "fuzz/acert-test",
         "fuzz/asn1-test",
         "fuzz/asn1parse-test",
         "fuzz/bignum-test",
@@ -20228,7 +21441,24 @@ our %unified_info = (
         "fuzz/conf-test",
         "fuzz/crl-test",
         "fuzz/ct-test",
+        "fuzz/decoder-test",
+        "fuzz/dtlsclient-test",
+        "fuzz/dtlsserver-test",
+        "fuzz/hashtable-test",
+        "fuzz/ml-dsa-test",
+        "fuzz/ml-kem-test",
+        "fuzz/pem-test",
+        "fuzz/provider-test",
+        "fuzz/punycode-test",
+        "fuzz/quic-client-test",
+        "fuzz/quic-lcidm-test",
+        "fuzz/quic-rcidm-test",
+        "fuzz/quic-server-test",
+        "fuzz/quic-srtm-test",
         "fuzz/server-test",
+        "fuzz/slh-dsa-test",
+        "fuzz/smime-test",
+        "fuzz/v3name-test",
         "fuzz/x509-test",
         "test/aborttest",
         "test/acvp_test",
@@ -20261,6 +21491,7 @@ our %unified_info = (
         "test/buildtest_c_blowfish",
         "test/buildtest_c_bn",
         "test/buildtest_c_buffer",
+        "test/buildtest_c_byteorder",
         "test/buildtest_c_camellia",
         "test/buildtest_c_cast",
         "test/buildtest_c_cmac",
@@ -20269,7 +21500,6 @@ our %unified_info = (
         "test/buildtest_c_conftypes",
         "test/buildtest_c_core",
         "test/buildtest_c_core_dispatch",
-        "test/buildtest_c_core_names",
         "test/buildtest_c_core_object",
         "test/buildtest_c_cryptoerr_legacy",
         "test/buildtest_c_decoder",
@@ -20278,6 +21508,7 @@ our %unified_info = (
         "test/buildtest_c_dsa",
         "test/buildtest_c_dtls1",
         "test/buildtest_c_e_os2",
+        "test/buildtest_c_e_ostime",
         "test/buildtest_c_ebcdic",
         "test/buildtest_c_ec",
         "test/buildtest_c_ecdh",
@@ -20287,13 +21518,16 @@ our %unified_info = (
         "test/buildtest_c_evp",
         "test/buildtest_c_fips_names",
         "test/buildtest_c_hmac",
+        "test/buildtest_c_hpke",
         "test/buildtest_c_http",
         "test/buildtest_c_idea",
+        "test/buildtest_c_indicator",
         "test/buildtest_c_kdf",
         "test/buildtest_c_macros",
         "test/buildtest_c_md4",
         "test/buildtest_c_md5",
         "test/buildtest_c_mdc2",
+        "test/buildtest_c_ml_kem",
         "test/buildtest_c_modes",
         "test/buildtest_c_obj_mac",
         "test/buildtest_c_objects",
@@ -20304,6 +21538,7 @@ our %unified_info = (
         "test/buildtest_c_pem2",
         "test/buildtest_c_prov_ssl",
         "test/buildtest_c_provider",
+        "test/buildtest_c_quic",
         "test/buildtest_c_rand",
         "test/buildtest_c_rc2",
         "test/buildtest_c_rc4",
@@ -20318,6 +21553,7 @@ our %unified_info = (
         "test/buildtest_c_stack",
         "test/buildtest_c_store",
         "test/buildtest_c_symhacks",
+        "test/buildtest_c_thread",
         "test/buildtest_c_tls1",
         "test/buildtest_c_ts",
         "test/buildtest_c_txt_db",
@@ -20509,6 +21745,9 @@ our %unified_info = (
         "apps/lib/libapps-lib-apps.o" => [
             "apps/lib/apps.c"
         ],
+        "apps/lib/libapps-lib-apps_opt_printf.o" => [
+            "apps/lib/apps_opt_printf.c"
+        ],
         "apps/lib/libapps-lib-apps_ui.o" => [
             "apps/lib/apps_ui.c"
         ],
@@ -20526,6 +21765,9 @@ our %unified_info = (
         ],
         "apps/lib/libapps-lib-http_server.o" => [
             "apps/lib/http_server.c"
+        ],
+        "apps/lib/libapps-lib-log.o" => [
+            "apps/lib/log.c"
         ],
         "apps/lib/libapps-lib-names.o" => [
             "apps/lib/names.c"
@@ -20558,12 +21800,14 @@ our %unified_info = (
             "apps/lib/libapps-lib-app_rand.o",
             "apps/lib/libapps-lib-app_x509.o",
             "apps/lib/libapps-lib-apps.o",
+            "apps/lib/libapps-lib-apps_opt_printf.o",
             "apps/lib/libapps-lib-apps_ui.o",
             "apps/lib/libapps-lib-columns.o",
             "apps/lib/libapps-lib-engine.o",
             "apps/lib/libapps-lib-engine_loader.o",
             "apps/lib/libapps-lib-fmt.o",
             "apps/lib/libapps-lib-http_server.o",
+            "apps/lib/libapps-lib-log.o",
             "apps/lib/libapps-lib-names.o",
             "apps/lib/libapps-lib-opt.o",
             "apps/lib/libapps-lib-s_cb.o",
@@ -20617,6 +21861,7 @@ our %unified_info = (
             "apps/openssl-bin-s_server.o",
             "apps/openssl-bin-s_time.o",
             "apps/openssl-bin-sess_id.o",
+            "apps/openssl-bin-skeyutl.o",
             "apps/openssl-bin-smime.o",
             "apps/openssl-bin-speed.o",
             "apps/openssl-bin-spkac.o",
@@ -20762,6 +22007,9 @@ our %unified_info = (
         "apps/openssl-bin-sess_id.o" => [
             "apps/sess_id.c"
         ],
+        "apps/openssl-bin-skeyutl.o" => [
+            "apps/skeyutl.c"
+        ],
         "apps/openssl-bin-smime.o" => [
             "apps/smime.c"
         ],
@@ -20819,6 +22067,9 @@ our %unified_info = (
         "crypto/aes/libcrypto-lib-aesv8-armx.o" => [
             "crypto/aes/aesv8-armx.S"
         ],
+        "crypto/aes/libcrypto-lib-bsaes-armv8.o" => [
+            "crypto/aes/bsaes-armv8.S"
+        ],
         "crypto/aes/libcrypto-lib-vpaes-armv8.o" => [
             "crypto/aes/vpaes-armv8.S"
         ],
@@ -20836,6 +22087,9 @@ our %unified_info = (
         ],
         "crypto/aes/libfips-lib-aesv8-armx.o" => [
             "crypto/aes/aesv8-armx.S"
+        ],
+        "crypto/aes/libfips-lib-bsaes-armv8.o" => [
+            "crypto/aes/bsaes-armv8.S"
         ],
         "crypto/aes/libfips-lib-vpaes-armv8.o" => [
             "crypto/aes/vpaes-armv8.S"
@@ -21128,6 +22382,9 @@ our %unified_info = (
         "crypto/bio/libcrypto-lib-bss_dgram.o" => [
             "crypto/bio/bss_dgram.c"
         ],
+        "crypto/bio/libcrypto-lib-bss_dgram_pair.o" => [
+            "crypto/bio/bss_dgram_pair.c"
+        ],
         "crypto/bio/libcrypto-lib-bss_fd.o" => [
             "crypto/bio/bss_fd.c"
         ],
@@ -21383,6 +22640,9 @@ our %unified_info = (
         "crypto/cast/libcrypto-lib-c_skey.o" => [
             "crypto/cast/c_skey.c"
         ],
+        "crypto/chacha/libcrypto-lib-chacha-armv8-sve.o" => [
+            "crypto/chacha/chacha-armv8-sve.S"
+        ],
         "crypto/chacha/libcrypto-lib-chacha-armv8.o" => [
             "crypto/chacha/chacha-armv8.S"
         ],
@@ -21403,6 +22663,9 @@ our %unified_info = (
         ],
         "crypto/cmp/libcrypto-lib-cmp_err.o" => [
             "crypto/cmp/cmp_err.c"
+        ],
+        "crypto/cmp/libcrypto-lib-cmp_genm.o" => [
+            "crypto/cmp/cmp_genm.c"
         ],
         "crypto/cmp/libcrypto-lib-cmp_hdr.o" => [
             "crypto/cmp/cmp_hdr.c"
@@ -21899,6 +23162,15 @@ our %unified_info = (
         "crypto/ec/libcrypto-lib-ecp_oct.o" => [
             "crypto/ec/ecp_oct.c"
         ],
+        "crypto/ec/libcrypto-lib-ecp_sm2p256-armv8.o" => [
+            "crypto/ec/ecp_sm2p256-armv8.S"
+        ],
+        "crypto/ec/libcrypto-lib-ecp_sm2p256.o" => [
+            "crypto/ec/ecp_sm2p256.c"
+        ],
+        "crypto/ec/libcrypto-lib-ecp_sm2p256_table.o" => [
+            "crypto/ec/ecp_sm2p256_table.c"
+        ],
         "crypto/ec/libcrypto-lib-ecp_smpl.o" => [
             "crypto/ec/ecp_smpl.c"
         ],
@@ -21979,6 +23251,15 @@ our %unified_info = (
         ],
         "crypto/ec/libfips-lib-ecp_oct.o" => [
             "crypto/ec/ecp_oct.c"
+        ],
+        "crypto/ec/libfips-lib-ecp_sm2p256-armv8.o" => [
+            "crypto/ec/ecp_sm2p256-armv8.S"
+        ],
+        "crypto/ec/libfips-lib-ecp_sm2p256.o" => [
+            "crypto/ec/ecp_sm2p256.c"
+        ],
+        "crypto/ec/libfips-lib-ecp_sm2p256_table.o" => [
+            "crypto/ec/ecp_sm2p256_table.c"
         ],
         "crypto/ec/libfips-lib-ecp_smpl.o" => [
             "crypto/ec/ecp_smpl.c"
@@ -22091,8 +23372,14 @@ our %unified_info = (
         "crypto/err/libcrypto-lib-err_blocks.o" => [
             "crypto/err/err_blocks.c"
         ],
+        "crypto/err/libcrypto-lib-err_mark.o" => [
+            "crypto/err/err_mark.c"
+        ],
         "crypto/err/libcrypto-lib-err_prn.o" => [
             "crypto/err/err_prn.c"
+        ],
+        "crypto/err/libcrypto-lib-err_save.o" => [
+            "crypto/err/err_save.c"
         ],
         "crypto/ess/libcrypto-lib-ess_asn1.o" => [
             "crypto/ess/ess_asn1.c"
@@ -22340,8 +23627,14 @@ our %unified_info = (
         "crypto/evp/libcrypto-lib-pmeth_lib.o" => [
             "crypto/evp/pmeth_lib.c"
         ],
+        "crypto/evp/libcrypto-lib-s_lib.o" => [
+            "crypto/evp/s_lib.c"
+        ],
         "crypto/evp/libcrypto-lib-signature.o" => [
             "crypto/evp/signature.c"
+        ],
+        "crypto/evp/libcrypto-lib-skeymgmt_meth.o" => [
+            "crypto/evp/skeymgmt_meth.c"
         ],
         "crypto/evp/libfips-lib-asymcipher.o" => [
             "crypto/evp/asymcipher.c"
@@ -22388,9 +23681,6 @@ our %unified_info = (
         "crypto/evp/libfips-lib-keymgmt_meth.o" => [
             "crypto/evp/keymgmt_meth.c"
         ],
-        "crypto/evp/libfips-lib-m_sigver.o" => [
-            "crypto/evp/m_sigver.c"
-        ],
         "crypto/evp/libfips-lib-mac_lib.o" => [
             "crypto/evp/mac_lib.c"
         ],
@@ -22409,8 +23699,14 @@ our %unified_info = (
         "crypto/evp/libfips-lib-pmeth_lib.o" => [
             "crypto/evp/pmeth_lib.c"
         ],
+        "crypto/evp/libfips-lib-s_lib.o" => [
+            "crypto/evp/s_lib.c"
+        ],
         "crypto/evp/libfips-lib-signature.o" => [
             "crypto/evp/signature.c"
+        ],
+        "crypto/evp/libfips-lib-skeymgmt_meth.o" => [
+            "crypto/evp/skeymgmt_meth.c"
         ],
         "crypto/ffc/libcrypto-lib-ffc_backend.o" => [
             "crypto/ffc/ffc_backend.c"
@@ -22454,11 +23750,29 @@ our %unified_info = (
         "crypto/ffc/libfips-lib-ffc_params_validate.o" => [
             "crypto/ffc/ffc_params_validate.c"
         ],
+        "crypto/hashtable/libcrypto-lib-hashfunc.o" => [
+            "crypto/hashtable/hashfunc.c"
+        ],
+        "crypto/hashtable/libcrypto-lib-hashtable.o" => [
+            "crypto/hashtable/hashtable.c"
+        ],
+        "crypto/hashtable/libfips-lib-hashfunc.o" => [
+            "crypto/hashtable/hashfunc.c"
+        ],
+        "crypto/hashtable/libfips-lib-hashtable.o" => [
+            "crypto/hashtable/hashtable.c"
+        ],
         "crypto/hmac/libcrypto-lib-hmac.o" => [
             "crypto/hmac/hmac.c"
         ],
         "crypto/hmac/libfips-lib-hmac.o" => [
             "crypto/hmac/hmac.c"
+        ],
+        "crypto/hpke/libcrypto-lib-hpke.o" => [
+            "crypto/hpke/hpke.c"
+        ],
+        "crypto/hpke/libcrypto-lib-hpke_util.o" => [
+            "crypto/hpke/hpke_util.c"
         ],
         "crypto/http/libcrypto-lib-http_client.o" => [
             "crypto/http/http_client.c"
@@ -22508,6 +23822,9 @@ our %unified_info = (
         "crypto/libcrypto-lib-bsearch.o" => [
             "crypto/bsearch.c"
         ],
+        "crypto/libcrypto-lib-comp_methods.o" => [
+            "crypto/comp_methods.c"
+        ],
         "crypto/libcrypto-lib-context.o" => [
             "crypto/context.c"
         ],
@@ -22535,8 +23852,14 @@ our %unified_info = (
         "crypto/libcrypto-lib-cversion.o" => [
             "crypto/cversion.c"
         ],
+        "crypto/libcrypto-lib-defaults.o" => [
+            "crypto/defaults.c"
+        ],
         "crypto/libcrypto-lib-der_writer.o" => [
             "crypto/der_writer.c"
+        ],
+        "crypto/libcrypto-lib-deterministic_nonce.o" => [
+            "crypto/deterministic_nonce.c"
         ],
         "crypto/libcrypto-lib-ebcdic.o" => [
             "crypto/ebcdic.c"
@@ -22546,6 +23869,9 @@ our %unified_info = (
         ],
         "crypto/libcrypto-lib-getenv.o" => [
             "crypto/getenv.c"
+        ],
+        "crypto/libcrypto-lib-indicator_core.o" => [
+            "crypto/indicator_core.c"
         ],
         "crypto/libcrypto-lib-info.o" => [
             "crypto/info.c"
@@ -22595,6 +23921,9 @@ our %unified_info = (
         "crypto/libcrypto-lib-params_from_text.o" => [
             "crypto/params_from_text.c"
         ],
+        "crypto/libcrypto-lib-params_idx.o" => [
+            "crypto/params_idx.c"
+        ],
         "crypto/libcrypto-lib-passphrase.o" => [
             "crypto/passphrase.c"
         ],
@@ -22616,11 +23945,20 @@ our %unified_info = (
         "crypto/libcrypto-lib-punycode.o" => [
             "crypto/punycode.c"
         ],
+        "crypto/libcrypto-lib-quic_vlint.o" => [
+            "crypto/quic_vlint.c"
+        ],
         "crypto/libcrypto-lib-self_test_core.o" => [
             "crypto/self_test_core.c"
         ],
+        "crypto/libcrypto-lib-sleep.o" => [
+            "crypto/sleep.c"
+        ],
         "crypto/libcrypto-lib-sparse_array.o" => [
             "crypto/sparse_array.c"
+        ],
+        "crypto/libcrypto-lib-ssl_err.o" => [
+            "crypto/ssl_err.c"
         ],
         "crypto/libcrypto-lib-threads_lib.o" => [
             "crypto/threads_lib.c"
@@ -22633,6 +23971,9 @@ our %unified_info = (
         ],
         "crypto/libcrypto-lib-threads_win.o" => [
             "crypto/threads_win.c"
+        ],
+        "crypto/libcrypto-lib-time.o" => [
+            "crypto/time.c"
         ],
         "crypto/libcrypto-lib-trace.o" => [
             "crypto/trace.c"
@@ -22703,6 +24044,9 @@ our %unified_info = (
         "crypto/libfips-lib-params_from_text.o" => [
             "crypto/params_from_text.c"
         ],
+        "crypto/libfips-lib-params_idx.o" => [
+            "crypto/params_idx.c"
+        ],
         "crypto/libfips-lib-provider_core.o" => [
             "crypto/provider_core.c"
         ],
@@ -22727,11 +24071,17 @@ our %unified_info = (
         "crypto/libfips-lib-threads_win.o" => [
             "crypto/threads_win.c"
         ],
+        "crypto/libfips-lib-time.o" => [
+            "crypto/time.c"
+        ],
         "crypto/md4/libcrypto-lib-md4_dgst.o" => [
             "crypto/md4/md4_dgst.c"
         ],
         "crypto/md4/libcrypto-lib-md4_one.o" => [
             "crypto/md4/md4_one.c"
+        ],
+        "crypto/md5/libcrypto-lib-md5-aarch64.o" => [
+            "crypto/md5/md5-aarch64.S"
         ],
         "crypto/md5/libcrypto-lib-md5_dgst.o" => [
             "crypto/md5/md5_dgst.c"
@@ -22747,6 +24097,63 @@ our %unified_info = (
         ],
         "crypto/mdc2/libcrypto-lib-mdc2dgst.o" => [
             "crypto/mdc2/mdc2dgst.c"
+        ],
+        "crypto/ml_dsa/libcrypto-lib-ml_dsa_encoders.o" => [
+            "crypto/ml_dsa/ml_dsa_encoders.c"
+        ],
+        "crypto/ml_dsa/libcrypto-lib-ml_dsa_key.o" => [
+            "crypto/ml_dsa/ml_dsa_key.c"
+        ],
+        "crypto/ml_dsa/libcrypto-lib-ml_dsa_key_compress.o" => [
+            "crypto/ml_dsa/ml_dsa_key_compress.c"
+        ],
+        "crypto/ml_dsa/libcrypto-lib-ml_dsa_matrix.o" => [
+            "crypto/ml_dsa/ml_dsa_matrix.c"
+        ],
+        "crypto/ml_dsa/libcrypto-lib-ml_dsa_ntt.o" => [
+            "crypto/ml_dsa/ml_dsa_ntt.c"
+        ],
+        "crypto/ml_dsa/libcrypto-lib-ml_dsa_params.o" => [
+            "crypto/ml_dsa/ml_dsa_params.c"
+        ],
+        "crypto/ml_dsa/libcrypto-lib-ml_dsa_sample.o" => [
+            "crypto/ml_dsa/ml_dsa_sample.c"
+        ],
+        "crypto/ml_dsa/libcrypto-lib-ml_dsa_sign.o" => [
+            "crypto/ml_dsa/ml_dsa_sign.c"
+        ],
+        "crypto/ml_dsa/libfips-lib-ml_dsa_encoders.o" => [
+            "crypto/ml_dsa/ml_dsa_encoders.c"
+        ],
+        "crypto/ml_dsa/libfips-lib-ml_dsa_key.o" => [
+            "crypto/ml_dsa/ml_dsa_key.c"
+        ],
+        "crypto/ml_dsa/libfips-lib-ml_dsa_key_compress.o" => [
+            "crypto/ml_dsa/ml_dsa_key_compress.c"
+        ],
+        "crypto/ml_dsa/libfips-lib-ml_dsa_matrix.o" => [
+            "crypto/ml_dsa/ml_dsa_matrix.c"
+        ],
+        "crypto/ml_dsa/libfips-lib-ml_dsa_ntt.o" => [
+            "crypto/ml_dsa/ml_dsa_ntt.c"
+        ],
+        "crypto/ml_dsa/libfips-lib-ml_dsa_params.o" => [
+            "crypto/ml_dsa/ml_dsa_params.c"
+        ],
+        "crypto/ml_dsa/libfips-lib-ml_dsa_sample.o" => [
+            "crypto/ml_dsa/ml_dsa_sample.c"
+        ],
+        "crypto/ml_dsa/libfips-lib-ml_dsa_sign.o" => [
+            "crypto/ml_dsa/ml_dsa_sign.c"
+        ],
+        "crypto/ml_kem/libcrypto-lib-ml_kem.o" => [
+            "crypto/ml_kem/ml_kem.c"
+        ],
+        "crypto/ml_kem/libfips-lib-ml_kem.o" => [
+            "crypto/ml_kem/ml_kem.c"
+        ],
+        "crypto/modes/libcrypto-lib-aes-gcm-armv8-unroll8_64.o" => [
+            "crypto/modes/aes-gcm-armv8-unroll8_64.S"
         ],
         "crypto/modes/libcrypto-lib-aes-gcm-armv8_64.o" => [
             "crypto/modes/aes-gcm-armv8_64.S"
@@ -22787,6 +24194,12 @@ our %unified_info = (
         "crypto/modes/libcrypto-lib-xts128.o" => [
             "crypto/modes/xts128.c"
         ],
+        "crypto/modes/libcrypto-lib-xts128gb.o" => [
+            "crypto/modes/xts128gb.c"
+        ],
+        "crypto/modes/libfips-lib-aes-gcm-armv8-unroll8_64.o" => [
+            "crypto/modes/aes-gcm-armv8-unroll8_64.S"
+        ],
         "crypto/modes/libfips-lib-aes-gcm-armv8_64.o" => [
             "crypto/modes/aes-gcm-armv8_64.S"
         ],
@@ -22816,6 +24229,9 @@ our %unified_info = (
         ],
         "crypto/modes/libfips-lib-xts128.o" => [
             "crypto/modes/xts128.c"
+        ],
+        "crypto/modes/libfips-lib-xts128gb.o" => [
+            "crypto/modes/xts128gb.c"
         ],
         "crypto/objects/libcrypto-lib-o_names.o" => [
             "crypto/objects/o_names.c"
@@ -23023,6 +24439,9 @@ our %unified_info = (
         ],
         "crypto/rand/libcrypto-lib-rand_pool.o" => [
             "crypto/rand/rand_pool.c"
+        ],
+        "crypto/rand/libcrypto-lib-rand_uniform.o" => [
+            "crypto/rand/rand_uniform.c"
         ],
         "crypto/rand/libcrypto-lib-randfile.o" => [
             "crypto/rand/randfile.c"
@@ -23255,6 +24674,66 @@ our %unified_info = (
         "crypto/siphash/libcrypto-lib-siphash.o" => [
             "crypto/siphash/siphash.c"
         ],
+        "crypto/slh_dsa/libcrypto-lib-slh_adrs.o" => [
+            "crypto/slh_dsa/slh_adrs.c"
+        ],
+        "crypto/slh_dsa/libcrypto-lib-slh_dsa.o" => [
+            "crypto/slh_dsa/slh_dsa.c"
+        ],
+        "crypto/slh_dsa/libcrypto-lib-slh_dsa_hash_ctx.o" => [
+            "crypto/slh_dsa/slh_dsa_hash_ctx.c"
+        ],
+        "crypto/slh_dsa/libcrypto-lib-slh_dsa_key.o" => [
+            "crypto/slh_dsa/slh_dsa_key.c"
+        ],
+        "crypto/slh_dsa/libcrypto-lib-slh_fors.o" => [
+            "crypto/slh_dsa/slh_fors.c"
+        ],
+        "crypto/slh_dsa/libcrypto-lib-slh_hash.o" => [
+            "crypto/slh_dsa/slh_hash.c"
+        ],
+        "crypto/slh_dsa/libcrypto-lib-slh_hypertree.o" => [
+            "crypto/slh_dsa/slh_hypertree.c"
+        ],
+        "crypto/slh_dsa/libcrypto-lib-slh_params.o" => [
+            "crypto/slh_dsa/slh_params.c"
+        ],
+        "crypto/slh_dsa/libcrypto-lib-slh_wots.o" => [
+            "crypto/slh_dsa/slh_wots.c"
+        ],
+        "crypto/slh_dsa/libcrypto-lib-slh_xmss.o" => [
+            "crypto/slh_dsa/slh_xmss.c"
+        ],
+        "crypto/slh_dsa/libfips-lib-slh_adrs.o" => [
+            "crypto/slh_dsa/slh_adrs.c"
+        ],
+        "crypto/slh_dsa/libfips-lib-slh_dsa.o" => [
+            "crypto/slh_dsa/slh_dsa.c"
+        ],
+        "crypto/slh_dsa/libfips-lib-slh_dsa_hash_ctx.o" => [
+            "crypto/slh_dsa/slh_dsa_hash_ctx.c"
+        ],
+        "crypto/slh_dsa/libfips-lib-slh_dsa_key.o" => [
+            "crypto/slh_dsa/slh_dsa_key.c"
+        ],
+        "crypto/slh_dsa/libfips-lib-slh_fors.o" => [
+            "crypto/slh_dsa/slh_fors.c"
+        ],
+        "crypto/slh_dsa/libfips-lib-slh_hash.o" => [
+            "crypto/slh_dsa/slh_hash.c"
+        ],
+        "crypto/slh_dsa/libfips-lib-slh_hypertree.o" => [
+            "crypto/slh_dsa/slh_hypertree.c"
+        ],
+        "crypto/slh_dsa/libfips-lib-slh_params.o" => [
+            "crypto/slh_dsa/slh_params.c"
+        ],
+        "crypto/slh_dsa/libfips-lib-slh_wots.o" => [
+            "crypto/slh_dsa/slh_wots.c"
+        ],
+        "crypto/slh_dsa/libfips-lib-slh_xmss.o" => [
+            "crypto/slh_dsa/slh_xmss.c"
+        ],
         "crypto/sm2/libcrypto-lib-sm2_crypt.o" => [
             "crypto/sm2/sm2_crypt.c"
         ],
@@ -23270,11 +24749,23 @@ our %unified_info = (
         "crypto/sm3/libcrypto-lib-legacy_sm3.o" => [
             "crypto/sm3/legacy_sm3.c"
         ],
+        "crypto/sm3/libcrypto-lib-sm3-armv8.o" => [
+            "crypto/sm3/sm3-armv8.S"
+        ],
         "crypto/sm3/libcrypto-lib-sm3.o" => [
             "crypto/sm3/sm3.c"
         ],
+        "crypto/sm4/libcrypto-lib-sm4-armv8.o" => [
+            "crypto/sm4/sm4-armv8.S"
+        ],
         "crypto/sm4/libcrypto-lib-sm4.o" => [
             "crypto/sm4/sm4.c"
+        ],
+        "crypto/sm4/libcrypto-lib-vpsm4-armv8.o" => [
+            "crypto/sm4/vpsm4-armv8.S"
+        ],
+        "crypto/sm4/libcrypto-lib-vpsm4_ex-armv8.o" => [
+            "crypto/sm4/vpsm4_ex-armv8.S"
         ],
         "crypto/srp/libcrypto-lib-srp_lib.o" => [
             "crypto/srp/srp_lib.c"
@@ -23308,6 +24799,42 @@ our %unified_info = (
         ],
         "crypto/store/libcrypto-lib-store_strings.o" => [
             "crypto/store/store_strings.c"
+        ],
+        "crypto/thread/arch/libcrypto-lib-thread_none.o" => [
+            "crypto/thread/arch/thread_none.c"
+        ],
+        "crypto/thread/arch/libcrypto-lib-thread_posix.o" => [
+            "crypto/thread/arch/thread_posix.c"
+        ],
+        "crypto/thread/arch/libcrypto-lib-thread_win.o" => [
+            "crypto/thread/arch/thread_win.c"
+        ],
+        "crypto/thread/arch/libfips-lib-thread_none.o" => [
+            "crypto/thread/arch/thread_none.c"
+        ],
+        "crypto/thread/arch/libfips-lib-thread_posix.o" => [
+            "crypto/thread/arch/thread_posix.c"
+        ],
+        "crypto/thread/arch/libfips-lib-thread_win.o" => [
+            "crypto/thread/arch/thread_win.c"
+        ],
+        "crypto/thread/libcrypto-lib-api.o" => [
+            "crypto/thread/api.c"
+        ],
+        "crypto/thread/libcrypto-lib-arch.o" => [
+            "crypto/thread/arch.c"
+        ],
+        "crypto/thread/libcrypto-lib-internal.o" => [
+            "crypto/thread/internal.c"
+        ],
+        "crypto/thread/libfips-lib-api.o" => [
+            "crypto/thread/api.c"
+        ],
+        "crypto/thread/libfips-lib-arch.o" => [
+            "crypto/thread/arch.c"
+        ],
+        "crypto/thread/libfips-lib-internal.o" => [
+            "crypto/thread/internal.c"
         ],
         "crypto/ts/libcrypto-lib-ts_asn1.o" => [
             "crypto/ts/ts_asn1.c"
@@ -23393,6 +24920,9 @@ our %unified_info = (
         "crypto/x509/libcrypto-lib-pcy_tree.o" => [
             "crypto/x509/pcy_tree.c"
         ],
+        "crypto/x509/libcrypto-lib-t_acert.o" => [
+            "crypto/x509/t_acert.c"
+        ],
         "crypto/x509/libcrypto-lib-t_crl.o" => [
             "crypto/x509/t_crl.c"
         ],
@@ -23401,6 +24931,12 @@ our %unified_info = (
         ],
         "crypto/x509/libcrypto-lib-t_x509.o" => [
             "crypto/x509/t_x509.c"
+        ],
+        "crypto/x509/libcrypto-lib-v3_aaa.o" => [
+            "crypto/x509/v3_aaa.c"
+        ],
+        "crypto/x509/libcrypto-lib-v3_ac_tgt.o" => [
+            "crypto/x509/v3_ac_tgt.c"
         ],
         "crypto/x509/libcrypto-lib-v3_addr.o" => [
             "crypto/x509/v3_addr.c"
@@ -23416,6 +24952,21 @@ our %unified_info = (
         ],
         "crypto/x509/libcrypto-lib-v3_asid.o" => [
             "crypto/x509/v3_asid.c"
+        ],
+        "crypto/x509/libcrypto-lib-v3_attrdesc.o" => [
+            "crypto/x509/v3_attrdesc.c"
+        ],
+        "crypto/x509/libcrypto-lib-v3_attrmap.o" => [
+            "crypto/x509/v3_attrmap.c"
+        ],
+        "crypto/x509/libcrypto-lib-v3_audit_id.o" => [
+            "crypto/x509/v3_audit_id.c"
+        ],
+        "crypto/x509/libcrypto-lib-v3_authattid.o" => [
+            "crypto/x509/v3_authattid.c"
+        ],
+        "crypto/x509/libcrypto-lib-v3_battcons.o" => [
+            "crypto/x509/v3_battcons.c"
         ],
         "crypto/x509/libcrypto-lib-v3_bcons.o" => [
             "crypto/x509/v3_bcons.c"
@@ -23441,14 +24992,23 @@ our %unified_info = (
         "crypto/x509/libcrypto-lib-v3_genn.o" => [
             "crypto/x509/v3_genn.c"
         ],
+        "crypto/x509/libcrypto-lib-v3_group_ac.o" => [
+            "crypto/x509/v3_group_ac.c"
+        ],
         "crypto/x509/libcrypto-lib-v3_ia5.o" => [
             "crypto/x509/v3_ia5.c"
+        ],
+        "crypto/x509/libcrypto-lib-v3_ind_iss.o" => [
+            "crypto/x509/v3_ind_iss.c"
         ],
         "crypto/x509/libcrypto-lib-v3_info.o" => [
             "crypto/x509/v3_info.c"
         ],
         "crypto/x509/libcrypto-lib-v3_int.o" => [
             "crypto/x509/v3_int.c"
+        ],
+        "crypto/x509/libcrypto-lib-v3_iobo.o" => [
+            "crypto/x509/v3_iobo.c"
         ],
         "crypto/x509/libcrypto-lib-v3_ist.o" => [
             "crypto/x509/v3_ist.c"
@@ -23458,6 +25018,12 @@ our %unified_info = (
         ],
         "crypto/x509/libcrypto-lib-v3_ncons.o" => [
             "crypto/x509/v3_ncons.c"
+        ],
+        "crypto/x509/libcrypto-lib-v3_no_ass.o" => [
+            "crypto/x509/v3_no_ass.c"
+        ],
+        "crypto/x509/libcrypto-lib-v3_no_rev_avail.o" => [
+            "crypto/x509/v3_no_rev_avail.c"
         ],
         "crypto/x509/libcrypto-lib-v3_pci.o" => [
             "crypto/x509/v3_pci.c"
@@ -23480,17 +25046,35 @@ our %unified_info = (
         "crypto/x509/libcrypto-lib-v3_purp.o" => [
             "crypto/x509/v3_purp.c"
         ],
+        "crypto/x509/libcrypto-lib-v3_rolespec.o" => [
+            "crypto/x509/v3_rolespec.c"
+        ],
         "crypto/x509/libcrypto-lib-v3_san.o" => [
             "crypto/x509/v3_san.c"
+        ],
+        "crypto/x509/libcrypto-lib-v3_sda.o" => [
+            "crypto/x509/v3_sda.c"
+        ],
+        "crypto/x509/libcrypto-lib-v3_single_use.o" => [
+            "crypto/x509/v3_single_use.c"
         ],
         "crypto/x509/libcrypto-lib-v3_skid.o" => [
             "crypto/x509/v3_skid.c"
         ],
+        "crypto/x509/libcrypto-lib-v3_soa_id.o" => [
+            "crypto/x509/v3_soa_id.c"
+        ],
         "crypto/x509/libcrypto-lib-v3_sxnet.o" => [
             "crypto/x509/v3_sxnet.c"
         ],
+        "crypto/x509/libcrypto-lib-v3_timespec.o" => [
+            "crypto/x509/v3_timespec.c"
+        ],
         "crypto/x509/libcrypto-lib-v3_tlsf.o" => [
             "crypto/x509/v3_tlsf.c"
+        ],
+        "crypto/x509/libcrypto-lib-v3_usernotice.o" => [
+            "crypto/x509/v3_usernotice.c"
         ],
         "crypto/x509/libcrypto-lib-v3_utf8.o" => [
             "crypto/x509/v3_utf8.c"
@@ -23500,6 +25084,9 @@ our %unified_info = (
         ],
         "crypto/x509/libcrypto-lib-v3err.o" => [
             "crypto/x509/v3err.c"
+        ],
+        "crypto/x509/libcrypto-lib-x509_acert.o" => [
+            "crypto/x509/x509_acert.c"
         ],
         "crypto/x509/libcrypto-lib-x509_att.o" => [
             "crypto/x509/x509_att.c"
@@ -23552,6 +25139,9 @@ our %unified_info = (
         "crypto/x509/libcrypto-lib-x509_vpm.o" => [
             "crypto/x509/x509_vpm.c"
         ],
+        "crypto/x509/libcrypto-lib-x509aset.o" => [
+            "crypto/x509/x509aset.c"
+        ],
         "crypto/x509/libcrypto-lib-x509cset.o" => [
             "crypto/x509/x509cset.c"
         ],
@@ -23579,6 +25169,9 @@ our %unified_info = (
         "crypto/x509/libcrypto-lib-x_exten.o" => [
             "crypto/x509/x_exten.c"
         ],
+        "crypto/x509/libcrypto-lib-x_ietfatt.o" => [
+            "crypto/x509/x_ietfatt.c"
+        ],
         "crypto/x509/libcrypto-lib-x_name.o" => [
             "crypto/x509/x_name.c"
         ],
@@ -23599,6 +25192,16 @@ our %unified_info = (
         ],
         "engines/libcrypto-lib-e_padlock.o" => [
             "engines/e_padlock.c"
+        ],
+        "fuzz/acert-test" => [
+            "fuzz/acert-test-bin-acert.o",
+            "fuzz/acert-test-bin-test-corpus.o"
+        ],
+        "fuzz/acert-test-bin-acert.o" => [
+            "fuzz/acert.c"
+        ],
+        "fuzz/acert-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
         ],
         "fuzz/asn1-test" => [
             "fuzz/asn1-test-bin-asn1.o",
@@ -23712,6 +25315,190 @@ our %unified_info = (
         "fuzz/ct-test-bin-test-corpus.o" => [
             "fuzz/test-corpus.c"
         ],
+        "fuzz/decoder-test" => [
+            "fuzz/decoder-test-bin-decoder.o",
+            "fuzz/decoder-test-bin-fuzz_rand.o",
+            "fuzz/decoder-test-bin-test-corpus.o"
+        ],
+        "fuzz/decoder-test-bin-decoder.o" => [
+            "fuzz/decoder.c"
+        ],
+        "fuzz/decoder-test-bin-fuzz_rand.o" => [
+            "fuzz/fuzz_rand.c"
+        ],
+        "fuzz/decoder-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/dtlsclient-test" => [
+            "fuzz/dtlsclient-test-bin-dtlsclient.o",
+            "fuzz/dtlsclient-test-bin-fuzz_rand.o",
+            "fuzz/dtlsclient-test-bin-test-corpus.o"
+        ],
+        "fuzz/dtlsclient-test-bin-dtlsclient.o" => [
+            "fuzz/dtlsclient.c"
+        ],
+        "fuzz/dtlsclient-test-bin-fuzz_rand.o" => [
+            "fuzz/fuzz_rand.c"
+        ],
+        "fuzz/dtlsclient-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/dtlsserver-test" => [
+            "fuzz/dtlsserver-test-bin-dtlsserver.o",
+            "fuzz/dtlsserver-test-bin-fuzz_rand.o",
+            "fuzz/dtlsserver-test-bin-test-corpus.o"
+        ],
+        "fuzz/dtlsserver-test-bin-dtlsserver.o" => [
+            "fuzz/dtlsserver.c"
+        ],
+        "fuzz/dtlsserver-test-bin-fuzz_rand.o" => [
+            "fuzz/fuzz_rand.c"
+        ],
+        "fuzz/dtlsserver-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/hashtable-test" => [
+            "fuzz/hashtable-test-bin-fuzz_rand.o",
+            "fuzz/hashtable-test-bin-hashtable.o",
+            "fuzz/hashtable-test-bin-test-corpus.o"
+        ],
+        "fuzz/hashtable-test-bin-fuzz_rand.o" => [
+            "fuzz/fuzz_rand.c"
+        ],
+        "fuzz/hashtable-test-bin-hashtable.o" => [
+            "fuzz/hashtable.c"
+        ],
+        "fuzz/hashtable-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/ml-dsa-test" => [
+            "fuzz/ml-dsa-test-bin-fuzz_rand.o",
+            "fuzz/ml-dsa-test-bin-ml-dsa.o",
+            "fuzz/ml-dsa-test-bin-test-corpus.o"
+        ],
+        "fuzz/ml-dsa-test-bin-fuzz_rand.o" => [
+            "fuzz/fuzz_rand.c"
+        ],
+        "fuzz/ml-dsa-test-bin-ml-dsa.o" => [
+            "fuzz/ml-dsa.c"
+        ],
+        "fuzz/ml-dsa-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/ml-kem-test" => [
+            "fuzz/ml-kem-test-bin-fuzz_rand.o",
+            "fuzz/ml-kem-test-bin-ml-kem.o",
+            "fuzz/ml-kem-test-bin-test-corpus.o"
+        ],
+        "fuzz/ml-kem-test-bin-fuzz_rand.o" => [
+            "fuzz/fuzz_rand.c"
+        ],
+        "fuzz/ml-kem-test-bin-ml-kem.o" => [
+            "fuzz/ml-kem.c"
+        ],
+        "fuzz/ml-kem-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/pem-test" => [
+            "fuzz/pem-test-bin-pem.o",
+            "fuzz/pem-test-bin-test-corpus.o"
+        ],
+        "fuzz/pem-test-bin-pem.o" => [
+            "fuzz/pem.c"
+        ],
+        "fuzz/pem-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/provider-test" => [
+            "fuzz/provider-test-bin-provider.o",
+            "fuzz/provider-test-bin-test-corpus.o"
+        ],
+        "fuzz/provider-test-bin-provider.o" => [
+            "fuzz/provider.c"
+        ],
+        "fuzz/provider-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/punycode-test" => [
+            "fuzz/punycode-test-bin-punycode.o",
+            "fuzz/punycode-test-bin-test-corpus.o"
+        ],
+        "fuzz/punycode-test-bin-punycode.o" => [
+            "fuzz/punycode.c"
+        ],
+        "fuzz/punycode-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/quic-client-test" => [
+            "fuzz/quic-client-test-bin-fuzz_rand.o",
+            "fuzz/quic-client-test-bin-quic-client.o",
+            "fuzz/quic-client-test-bin-test-corpus.o"
+        ],
+        "fuzz/quic-client-test-bin-fuzz_rand.o" => [
+            "fuzz/fuzz_rand.c"
+        ],
+        "fuzz/quic-client-test-bin-quic-client.o" => [
+            "fuzz/quic-client.c"
+        ],
+        "fuzz/quic-client-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/quic-lcidm-test" => [
+            "fuzz/quic-lcidm-test-bin-fuzz_rand.o",
+            "fuzz/quic-lcidm-test-bin-quic-lcidm.o",
+            "fuzz/quic-lcidm-test-bin-test-corpus.o"
+        ],
+        "fuzz/quic-lcidm-test-bin-fuzz_rand.o" => [
+            "fuzz/fuzz_rand.c"
+        ],
+        "fuzz/quic-lcidm-test-bin-quic-lcidm.o" => [
+            "fuzz/quic-lcidm.c"
+        ],
+        "fuzz/quic-lcidm-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/quic-rcidm-test" => [
+            "fuzz/quic-rcidm-test-bin-fuzz_rand.o",
+            "fuzz/quic-rcidm-test-bin-quic-rcidm.o",
+            "fuzz/quic-rcidm-test-bin-test-corpus.o"
+        ],
+        "fuzz/quic-rcidm-test-bin-fuzz_rand.o" => [
+            "fuzz/fuzz_rand.c"
+        ],
+        "fuzz/quic-rcidm-test-bin-quic-rcidm.o" => [
+            "fuzz/quic-rcidm.c"
+        ],
+        "fuzz/quic-rcidm-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/quic-server-test" => [
+            "fuzz/quic-server-test-bin-fuzz_rand.o",
+            "fuzz/quic-server-test-bin-quic-server.o",
+            "fuzz/quic-server-test-bin-test-corpus.o"
+        ],
+        "fuzz/quic-server-test-bin-fuzz_rand.o" => [
+            "fuzz/fuzz_rand.c"
+        ],
+        "fuzz/quic-server-test-bin-quic-server.o" => [
+            "fuzz/quic-server.c"
+        ],
+        "fuzz/quic-server-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/quic-srtm-test" => [
+            "fuzz/quic-srtm-test-bin-fuzz_rand.o",
+            "fuzz/quic-srtm-test-bin-quic-srtm.o",
+            "fuzz/quic-srtm-test-bin-test-corpus.o"
+        ],
+        "fuzz/quic-srtm-test-bin-fuzz_rand.o" => [
+            "fuzz/fuzz_rand.c"
+        ],
+        "fuzz/quic-srtm-test-bin-quic-srtm.o" => [
+            "fuzz/quic-srtm.c"
+        ],
+        "fuzz/quic-srtm-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
         "fuzz/server-test" => [
             "fuzz/server-test-bin-fuzz_rand.o",
             "fuzz/server-test-bin-server.o",
@@ -23725,6 +25512,40 @@ our %unified_info = (
         ],
         "fuzz/server-test-bin-test-corpus.o" => [
             "fuzz/test-corpus.c"
+        ],
+        "fuzz/slh-dsa-test" => [
+            "fuzz/slh-dsa-test-bin-fuzz_rand.o",
+            "fuzz/slh-dsa-test-bin-slh-dsa.o",
+            "fuzz/slh-dsa-test-bin-test-corpus.o"
+        ],
+        "fuzz/slh-dsa-test-bin-fuzz_rand.o" => [
+            "fuzz/fuzz_rand.c"
+        ],
+        "fuzz/slh-dsa-test-bin-slh-dsa.o" => [
+            "fuzz/slh-dsa.c"
+        ],
+        "fuzz/slh-dsa-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/smime-test" => [
+            "fuzz/smime-test-bin-smime.o",
+            "fuzz/smime-test-bin-test-corpus.o"
+        ],
+        "fuzz/smime-test-bin-smime.o" => [
+            "fuzz/smime.c"
+        ],
+        "fuzz/smime-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/v3name-test" => [
+            "fuzz/v3name-test-bin-test-corpus.o",
+            "fuzz/v3name-test-bin-v3name.o"
+        ],
+        "fuzz/v3name-test-bin-test-corpus.o" => [
+            "fuzz/test-corpus.c"
+        ],
+        "fuzz/v3name-test-bin-v3name.o" => [
+            "fuzz/v3name.c"
         ],
         "fuzz/x509-test" => [
             "fuzz/x509-test-bin-fuzz_rand.o",
@@ -23750,6 +25571,7 @@ our %unified_info = (
             "crypto/aes/libcrypto-lib-aes_ofb.o",
             "crypto/aes/libcrypto-lib-aes_wrap.o",
             "crypto/aes/libcrypto-lib-aesv8-armx.o",
+            "crypto/aes/libcrypto-lib-bsaes-armv8.o",
             "crypto/aes/libcrypto-lib-vpaes-armv8.o",
             "crypto/aria/libcrypto-lib-aria.o",
             "crypto/asn1/libcrypto-lib-a_bitstr.o",
@@ -23847,6 +25669,7 @@ our %unified_info = (
             "crypto/bio/libcrypto-lib-bss_conn.o",
             "crypto/bio/libcrypto-lib-bss_core.o",
             "crypto/bio/libcrypto-lib-bss_dgram.o",
+            "crypto/bio/libcrypto-lib-bss_dgram_pair.o",
             "crypto/bio/libcrypto-lib-bss_fd.o",
             "crypto/bio/libcrypto-lib-bss_file.o",
             "crypto/bio/libcrypto-lib-bss_log.o",
@@ -23902,12 +25725,14 @@ our %unified_info = (
             "crypto/cast/libcrypto-lib-c_enc.o",
             "crypto/cast/libcrypto-lib-c_ofb64.o",
             "crypto/cast/libcrypto-lib-c_skey.o",
+            "crypto/chacha/libcrypto-lib-chacha-armv8-sve.o",
             "crypto/chacha/libcrypto-lib-chacha-armv8.o",
             "crypto/cmac/libcrypto-lib-cmac.o",
             "crypto/cmp/libcrypto-lib-cmp_asn.o",
             "crypto/cmp/libcrypto-lib-cmp_client.o",
             "crypto/cmp/libcrypto-lib-cmp_ctx.o",
             "crypto/cmp/libcrypto-lib-cmp_err.o",
+            "crypto/cmp/libcrypto-lib-cmp_genm.o",
             "crypto/cmp/libcrypto-lib-cmp_hdr.o",
             "crypto/cmp/libcrypto-lib-cmp_http.o",
             "crypto/cmp/libcrypto-lib-cmp_msg.o",
@@ -24047,6 +25872,9 @@ our %unified_info = (
             "crypto/ec/libcrypto-lib-ecp_nistz256-armv8.o",
             "crypto/ec/libcrypto-lib-ecp_nistz256.o",
             "crypto/ec/libcrypto-lib-ecp_oct.o",
+            "crypto/ec/libcrypto-lib-ecp_sm2p256-armv8.o",
+            "crypto/ec/libcrypto-lib-ecp_sm2p256.o",
+            "crypto/ec/libcrypto-lib-ecp_sm2p256_table.o",
             "crypto/ec/libcrypto-lib-ecp_smpl.o",
             "crypto/ec/libcrypto-lib-ecx_backend.o",
             "crypto/ec/libcrypto-lib-ecx_key.o",
@@ -24085,7 +25913,9 @@ our %unified_info = (
             "crypto/err/libcrypto-lib-err_all.o",
             "crypto/err/libcrypto-lib-err_all_legacy.o",
             "crypto/err/libcrypto-lib-err_blocks.o",
+            "crypto/err/libcrypto-lib-err_mark.o",
             "crypto/err/libcrypto-lib-err_prn.o",
+            "crypto/err/libcrypto-lib-err_save.o",
             "crypto/ess/libcrypto-lib-ess_asn1.o",
             "crypto/ess/libcrypto-lib-ess_err.o",
             "crypto/ess/libcrypto-lib-ess_lib.o",
@@ -24168,7 +25998,9 @@ our %unified_info = (
             "crypto/evp/libcrypto-lib-pmeth_check.o",
             "crypto/evp/libcrypto-lib-pmeth_gn.o",
             "crypto/evp/libcrypto-lib-pmeth_lib.o",
+            "crypto/evp/libcrypto-lib-s_lib.o",
             "crypto/evp/libcrypto-lib-signature.o",
+            "crypto/evp/libcrypto-lib-skeymgmt_meth.o",
             "crypto/ffc/libcrypto-lib-ffc_backend.o",
             "crypto/ffc/libcrypto-lib-ffc_dh.o",
             "crypto/ffc/libcrypto-lib-ffc_key_generate.o",
@@ -24176,7 +26008,11 @@ our %unified_info = (
             "crypto/ffc/libcrypto-lib-ffc_params.o",
             "crypto/ffc/libcrypto-lib-ffc_params_generate.o",
             "crypto/ffc/libcrypto-lib-ffc_params_validate.o",
+            "crypto/hashtable/libcrypto-lib-hashfunc.o",
+            "crypto/hashtable/libcrypto-lib-hashtable.o",
             "crypto/hmac/libcrypto-lib-hmac.o",
+            "crypto/hpke/libcrypto-lib-hpke.o",
+            "crypto/hpke/libcrypto-lib-hpke_util.o",
             "crypto/http/libcrypto-lib-http_client.o",
             "crypto/http/libcrypto-lib-http_err.o",
             "crypto/http/libcrypto-lib-http_lib.o",
@@ -24192,6 +26028,7 @@ our %unified_info = (
             "crypto/libcrypto-lib-armcap.o",
             "crypto/libcrypto-lib-asn1_dsa.o",
             "crypto/libcrypto-lib-bsearch.o",
+            "crypto/libcrypto-lib-comp_methods.o",
             "crypto/libcrypto-lib-context.o",
             "crypto/libcrypto-lib-core_algorithm.o",
             "crypto/libcrypto-lib-core_fetch.o",
@@ -24201,10 +26038,13 @@ our %unified_info = (
             "crypto/libcrypto-lib-cryptlib.o",
             "crypto/libcrypto-lib-ctype.o",
             "crypto/libcrypto-lib-cversion.o",
+            "crypto/libcrypto-lib-defaults.o",
             "crypto/libcrypto-lib-der_writer.o",
+            "crypto/libcrypto-lib-deterministic_nonce.o",
             "crypto/libcrypto-lib-ebcdic.o",
             "crypto/libcrypto-lib-ex_data.o",
             "crypto/libcrypto-lib-getenv.o",
+            "crypto/libcrypto-lib-indicator_core.o",
             "crypto/libcrypto-lib-info.o",
             "crypto/libcrypto-lib-init.o",
             "crypto/libcrypto-lib-initthread.o",
@@ -24221,6 +26061,7 @@ our %unified_info = (
             "crypto/libcrypto-lib-params.o",
             "crypto/libcrypto-lib-params_dup.o",
             "crypto/libcrypto-lib-params_from_text.o",
+            "crypto/libcrypto-lib-params_idx.o",
             "crypto/libcrypto-lib-passphrase.o",
             "crypto/libcrypto-lib-provider.o",
             "crypto/libcrypto-lib-provider_child.o",
@@ -24228,21 +26069,36 @@ our %unified_info = (
             "crypto/libcrypto-lib-provider_core.o",
             "crypto/libcrypto-lib-provider_predefined.o",
             "crypto/libcrypto-lib-punycode.o",
+            "crypto/libcrypto-lib-quic_vlint.o",
             "crypto/libcrypto-lib-self_test_core.o",
+            "crypto/libcrypto-lib-sleep.o",
             "crypto/libcrypto-lib-sparse_array.o",
+            "crypto/libcrypto-lib-ssl_err.o",
             "crypto/libcrypto-lib-threads_lib.o",
             "crypto/libcrypto-lib-threads_none.o",
             "crypto/libcrypto-lib-threads_pthread.o",
             "crypto/libcrypto-lib-threads_win.o",
+            "crypto/libcrypto-lib-time.o",
             "crypto/libcrypto-lib-trace.o",
             "crypto/libcrypto-lib-uid.o",
             "crypto/md4/libcrypto-lib-md4_dgst.o",
             "crypto/md4/libcrypto-lib-md4_one.o",
+            "crypto/md5/libcrypto-lib-md5-aarch64.o",
             "crypto/md5/libcrypto-lib-md5_dgst.o",
             "crypto/md5/libcrypto-lib-md5_one.o",
             "crypto/md5/libcrypto-lib-md5_sha1.o",
             "crypto/mdc2/libcrypto-lib-mdc2_one.o",
             "crypto/mdc2/libcrypto-lib-mdc2dgst.o",
+            "crypto/ml_dsa/libcrypto-lib-ml_dsa_encoders.o",
+            "crypto/ml_dsa/libcrypto-lib-ml_dsa_key.o",
+            "crypto/ml_dsa/libcrypto-lib-ml_dsa_key_compress.o",
+            "crypto/ml_dsa/libcrypto-lib-ml_dsa_matrix.o",
+            "crypto/ml_dsa/libcrypto-lib-ml_dsa_ntt.o",
+            "crypto/ml_dsa/libcrypto-lib-ml_dsa_params.o",
+            "crypto/ml_dsa/libcrypto-lib-ml_dsa_sample.o",
+            "crypto/ml_dsa/libcrypto-lib-ml_dsa_sign.o",
+            "crypto/ml_kem/libcrypto-lib-ml_kem.o",
+            "crypto/modes/libcrypto-lib-aes-gcm-armv8-unroll8_64.o",
             "crypto/modes/libcrypto-lib-aes-gcm-armv8_64.o",
             "crypto/modes/libcrypto-lib-cbc128.o",
             "crypto/modes/libcrypto-lib-ccm128.o",
@@ -24256,6 +26112,7 @@ our %unified_info = (
             "crypto/modes/libcrypto-lib-siv128.o",
             "crypto/modes/libcrypto-lib-wrap128.o",
             "crypto/modes/libcrypto-lib-xts128.o",
+            "crypto/modes/libcrypto-lib-xts128gb.o",
             "crypto/objects/libcrypto-lib-o_names.o",
             "crypto/objects/libcrypto-lib-obj_dat.o",
             "crypto/objects/libcrypto-lib-obj_err.o",
@@ -24320,6 +26177,7 @@ our %unified_info = (
             "crypto/rand/libcrypto-lib-rand_lib.o",
             "crypto/rand/libcrypto-lib-rand_meth.o",
             "crypto/rand/libcrypto-lib-rand_pool.o",
+            "crypto/rand/libcrypto-lib-rand_uniform.o",
             "crypto/rand/libcrypto-lib-randfile.o",
             "crypto/rc2/libcrypto-lib-rc2_cbc.o",
             "crypto/rc2/libcrypto-lib-rc2_ecb.o",
@@ -24371,13 +26229,27 @@ our %unified_info = (
             "crypto/sha/libcrypto-lib-sha512-armv8.o",
             "crypto/sha/libcrypto-lib-sha512.o",
             "crypto/siphash/libcrypto-lib-siphash.o",
+            "crypto/slh_dsa/libcrypto-lib-slh_adrs.o",
+            "crypto/slh_dsa/libcrypto-lib-slh_dsa.o",
+            "crypto/slh_dsa/libcrypto-lib-slh_dsa_hash_ctx.o",
+            "crypto/slh_dsa/libcrypto-lib-slh_dsa_key.o",
+            "crypto/slh_dsa/libcrypto-lib-slh_fors.o",
+            "crypto/slh_dsa/libcrypto-lib-slh_hash.o",
+            "crypto/slh_dsa/libcrypto-lib-slh_hypertree.o",
+            "crypto/slh_dsa/libcrypto-lib-slh_params.o",
+            "crypto/slh_dsa/libcrypto-lib-slh_wots.o",
+            "crypto/slh_dsa/libcrypto-lib-slh_xmss.o",
             "crypto/sm2/libcrypto-lib-sm2_crypt.o",
             "crypto/sm2/libcrypto-lib-sm2_err.o",
             "crypto/sm2/libcrypto-lib-sm2_key.o",
             "crypto/sm2/libcrypto-lib-sm2_sign.o",
             "crypto/sm3/libcrypto-lib-legacy_sm3.o",
+            "crypto/sm3/libcrypto-lib-sm3-armv8.o",
             "crypto/sm3/libcrypto-lib-sm3.o",
+            "crypto/sm4/libcrypto-lib-sm4-armv8.o",
             "crypto/sm4/libcrypto-lib-sm4.o",
+            "crypto/sm4/libcrypto-lib-vpsm4-armv8.o",
+            "crypto/sm4/libcrypto-lib-vpsm4_ex-armv8.o",
             "crypto/srp/libcrypto-lib-srp_lib.o",
             "crypto/srp/libcrypto-lib-srp_vfy.o",
             "crypto/stack/libcrypto-lib-stack.o",
@@ -24388,6 +26260,12 @@ our %unified_info = (
             "crypto/store/libcrypto-lib-store_register.o",
             "crypto/store/libcrypto-lib-store_result.o",
             "crypto/store/libcrypto-lib-store_strings.o",
+            "crypto/thread/arch/libcrypto-lib-thread_none.o",
+            "crypto/thread/arch/libcrypto-lib-thread_posix.o",
+            "crypto/thread/arch/libcrypto-lib-thread_win.o",
+            "crypto/thread/libcrypto-lib-api.o",
+            "crypto/thread/libcrypto-lib-arch.o",
+            "crypto/thread/libcrypto-lib-internal.o",
             "crypto/ts/libcrypto-lib-ts_asn1.o",
             "crypto/ts/libcrypto-lib-ts_conf.o",
             "crypto/ts/libcrypto-lib-ts_err.o",
@@ -24416,14 +26294,22 @@ our %unified_info = (
             "crypto/x509/libcrypto-lib-pcy_map.o",
             "crypto/x509/libcrypto-lib-pcy_node.o",
             "crypto/x509/libcrypto-lib-pcy_tree.o",
+            "crypto/x509/libcrypto-lib-t_acert.o",
             "crypto/x509/libcrypto-lib-t_crl.o",
             "crypto/x509/libcrypto-lib-t_req.o",
             "crypto/x509/libcrypto-lib-t_x509.o",
+            "crypto/x509/libcrypto-lib-v3_aaa.o",
+            "crypto/x509/libcrypto-lib-v3_ac_tgt.o",
             "crypto/x509/libcrypto-lib-v3_addr.o",
             "crypto/x509/libcrypto-lib-v3_admis.o",
             "crypto/x509/libcrypto-lib-v3_akeya.o",
             "crypto/x509/libcrypto-lib-v3_akid.o",
             "crypto/x509/libcrypto-lib-v3_asid.o",
+            "crypto/x509/libcrypto-lib-v3_attrdesc.o",
+            "crypto/x509/libcrypto-lib-v3_attrmap.o",
+            "crypto/x509/libcrypto-lib-v3_audit_id.o",
+            "crypto/x509/libcrypto-lib-v3_authattid.o",
+            "crypto/x509/libcrypto-lib-v3_battcons.o",
             "crypto/x509/libcrypto-lib-v3_bcons.o",
             "crypto/x509/libcrypto-lib-v3_bitst.o",
             "crypto/x509/libcrypto-lib-v3_conf.o",
@@ -24432,12 +26318,17 @@ our %unified_info = (
             "crypto/x509/libcrypto-lib-v3_enum.o",
             "crypto/x509/libcrypto-lib-v3_extku.o",
             "crypto/x509/libcrypto-lib-v3_genn.o",
+            "crypto/x509/libcrypto-lib-v3_group_ac.o",
             "crypto/x509/libcrypto-lib-v3_ia5.o",
+            "crypto/x509/libcrypto-lib-v3_ind_iss.o",
             "crypto/x509/libcrypto-lib-v3_info.o",
             "crypto/x509/libcrypto-lib-v3_int.o",
+            "crypto/x509/libcrypto-lib-v3_iobo.o",
             "crypto/x509/libcrypto-lib-v3_ist.o",
             "crypto/x509/libcrypto-lib-v3_lib.o",
             "crypto/x509/libcrypto-lib-v3_ncons.o",
+            "crypto/x509/libcrypto-lib-v3_no_ass.o",
+            "crypto/x509/libcrypto-lib-v3_no_rev_avail.o",
             "crypto/x509/libcrypto-lib-v3_pci.o",
             "crypto/x509/libcrypto-lib-v3_pcia.o",
             "crypto/x509/libcrypto-lib-v3_pcons.o",
@@ -24445,13 +26336,20 @@ our %unified_info = (
             "crypto/x509/libcrypto-lib-v3_pmaps.o",
             "crypto/x509/libcrypto-lib-v3_prn.o",
             "crypto/x509/libcrypto-lib-v3_purp.o",
+            "crypto/x509/libcrypto-lib-v3_rolespec.o",
             "crypto/x509/libcrypto-lib-v3_san.o",
+            "crypto/x509/libcrypto-lib-v3_sda.o",
+            "crypto/x509/libcrypto-lib-v3_single_use.o",
             "crypto/x509/libcrypto-lib-v3_skid.o",
+            "crypto/x509/libcrypto-lib-v3_soa_id.o",
             "crypto/x509/libcrypto-lib-v3_sxnet.o",
+            "crypto/x509/libcrypto-lib-v3_timespec.o",
             "crypto/x509/libcrypto-lib-v3_tlsf.o",
+            "crypto/x509/libcrypto-lib-v3_usernotice.o",
             "crypto/x509/libcrypto-lib-v3_utf8.o",
             "crypto/x509/libcrypto-lib-v3_utl.o",
             "crypto/x509/libcrypto-lib-v3err.o",
+            "crypto/x509/libcrypto-lib-x509_acert.o",
             "crypto/x509/libcrypto-lib-x509_att.o",
             "crypto/x509/libcrypto-lib-x509_cmp.o",
             "crypto/x509/libcrypto-lib-x509_d2.o",
@@ -24469,6 +26367,7 @@ our %unified_info = (
             "crypto/x509/libcrypto-lib-x509_v3.o",
             "crypto/x509/libcrypto-lib-x509_vfy.o",
             "crypto/x509/libcrypto-lib-x509_vpm.o",
+            "crypto/x509/libcrypto-lib-x509aset.o",
             "crypto/x509/libcrypto-lib-x509cset.o",
             "crypto/x509/libcrypto-lib-x509name.o",
             "crypto/x509/libcrypto-lib-x509rset.o",
@@ -24478,6 +26377,7 @@ our %unified_info = (
             "crypto/x509/libcrypto-lib-x_attrib.o",
             "crypto/x509/libcrypto-lib-x_crl.o",
             "crypto/x509/libcrypto-lib-x_exten.o",
+            "crypto/x509/libcrypto-lib-x_ietfatt.o",
             "crypto/x509/libcrypto-lib-x_name.o",
             "crypto/x509/libcrypto-lib-x_pubkey.o",
             "crypto/x509/libcrypto-lib-x_req.o",
@@ -24498,14 +26398,15 @@ our %unified_info = (
             "ssl/libssl-lib-d1_srtp.o",
             "ssl/libssl-lib-methods.o",
             "ssl/libssl-lib-pqueue.o",
+            "ssl/libssl-lib-priority_queue.o",
             "ssl/libssl-lib-s3_enc.o",
             "ssl/libssl-lib-s3_lib.o",
             "ssl/libssl-lib-s3_msg.o",
             "ssl/libssl-lib-ssl_asn1.o",
             "ssl/libssl-lib-ssl_cert.o",
+            "ssl/libssl-lib-ssl_cert_comp.o",
             "ssl/libssl-lib-ssl_ciph.o",
             "ssl/libssl-lib-ssl_conf.o",
-            "ssl/libssl-lib-ssl_err.o",
             "ssl/libssl-lib-ssl_err_legacy.o",
             "ssl/libssl-lib-ssl_init.o",
             "ssl/libssl-lib-ssl_lib.o",
@@ -24522,12 +26423,60 @@ our %unified_info = (
             "ssl/libssl-lib-tls13_enc.o",
             "ssl/libssl-lib-tls_depr.o",
             "ssl/libssl-lib-tls_srp.o",
-            "ssl/record/libssl-lib-dtls1_bitmap.o",
+            "ssl/quic/libssl-lib-cc_newreno.o",
+            "ssl/quic/libssl-lib-json_enc.o",
+            "ssl/quic/libssl-lib-qlog.o",
+            "ssl/quic/libssl-lib-qlog_event_helpers.o",
+            "ssl/quic/libssl-lib-quic_ackm.o",
+            "ssl/quic/libssl-lib-quic_cfq.o",
+            "ssl/quic/libssl-lib-quic_channel.o",
+            "ssl/quic/libssl-lib-quic_demux.o",
+            "ssl/quic/libssl-lib-quic_engine.o",
+            "ssl/quic/libssl-lib-quic_fc.o",
+            "ssl/quic/libssl-lib-quic_fifd.o",
+            "ssl/quic/libssl-lib-quic_impl.o",
+            "ssl/quic/libssl-lib-quic_lcidm.o",
+            "ssl/quic/libssl-lib-quic_method.o",
+            "ssl/quic/libssl-lib-quic_obj.o",
+            "ssl/quic/libssl-lib-quic_port.o",
+            "ssl/quic/libssl-lib-quic_rcidm.o",
+            "ssl/quic/libssl-lib-quic_reactor.o",
+            "ssl/quic/libssl-lib-quic_reactor_wait_ctx.o",
+            "ssl/quic/libssl-lib-quic_record_rx.o",
+            "ssl/quic/libssl-lib-quic_record_shared.o",
+            "ssl/quic/libssl-lib-quic_record_tx.o",
+            "ssl/quic/libssl-lib-quic_record_util.o",
+            "ssl/quic/libssl-lib-quic_rstream.o",
+            "ssl/quic/libssl-lib-quic_rx_depack.o",
+            "ssl/quic/libssl-lib-quic_sf_list.o",
+            "ssl/quic/libssl-lib-quic_srt_gen.o",
+            "ssl/quic/libssl-lib-quic_srtm.o",
+            "ssl/quic/libssl-lib-quic_sstream.o",
+            "ssl/quic/libssl-lib-quic_statm.o",
+            "ssl/quic/libssl-lib-quic_stream_map.o",
+            "ssl/quic/libssl-lib-quic_thread_assist.o",
+            "ssl/quic/libssl-lib-quic_tls.o",
+            "ssl/quic/libssl-lib-quic_tls_api.o",
+            "ssl/quic/libssl-lib-quic_trace.o",
+            "ssl/quic/libssl-lib-quic_tserver.o",
+            "ssl/quic/libssl-lib-quic_txp.o",
+            "ssl/quic/libssl-lib-quic_txpim.o",
+            "ssl/quic/libssl-lib-quic_types.o",
+            "ssl/quic/libssl-lib-quic_wire.o",
+            "ssl/quic/libssl-lib-quic_wire_pkt.o",
+            "ssl/quic/libssl-lib-uint_set.o",
             "ssl/record/libssl-lib-rec_layer_d1.o",
             "ssl/record/libssl-lib-rec_layer_s3.o",
-            "ssl/record/libssl-lib-ssl3_buffer.o",
-            "ssl/record/libssl-lib-ssl3_record.o",
-            "ssl/record/libssl-lib-ssl3_record_tls13.o",
+            "ssl/record/methods/libssl-lib-dtls_meth.o",
+            "ssl/record/methods/libssl-lib-ssl3_meth.o",
+            "ssl/record/methods/libssl-lib-tls13_meth.o",
+            "ssl/record/methods/libssl-lib-tls1_meth.o",
+            "ssl/record/methods/libssl-lib-tls_common.o",
+            "ssl/record/methods/libssl-lib-tls_multib.o",
+            "ssl/record/methods/libssl-lib-tlsany_meth.o",
+            "ssl/rio/libssl-lib-poll_builder.o",
+            "ssl/rio/libssl-lib-poll_immediate.o",
+            "ssl/rio/libssl-lib-rio_notifier.o",
             "ssl/statem/libssl-lib-extensions.o",
             "ssl/statem/libssl-lib-extensions_clnt.o",
             "ssl/statem/libssl-lib-extensions_cust.o",
@@ -24565,11 +26514,23 @@ our %unified_info = (
         "providers/common/der/libcommon-lib-der_ecx_key.o" => [
             "providers/common/der/der_ecx_key.c"
         ],
+        "providers/common/der/libcommon-lib-der_ml_dsa_gen.o" => [
+            "providers/common/der/der_ml_dsa_gen.c"
+        ],
+        "providers/common/der/libcommon-lib-der_ml_dsa_key.o" => [
+            "providers/common/der/der_ml_dsa_key.c"
+        ],
         "providers/common/der/libcommon-lib-der_rsa_gen.o" => [
             "providers/common/der/der_rsa_gen.c"
         ],
         "providers/common/der/libcommon-lib-der_rsa_key.o" => [
             "providers/common/der/der_rsa_key.c"
+        ],
+        "providers/common/der/libcommon-lib-der_slh_dsa_gen.o" => [
+            "providers/common/der/der_slh_dsa_gen.c"
+        ],
+        "providers/common/der/libcommon-lib-der_slh_dsa_key.o" => [
+            "providers/common/der/der_slh_dsa_key.c"
         ],
         "providers/common/der/libcommon-lib-der_wrap_gen.o" => [
             "providers/common/der/der_wrap_gen.c"
@@ -24647,6 +26608,9 @@ our %unified_info = (
         "providers/fips/fips-dso-fips_entry.o" => [
             "providers/fips/fips_entry.c"
         ],
+        "providers/fips/libfips-lib-fipsindicator.o" => [
+            "providers/fips/fipsindicator.c"
+        ],
         "providers/fips/libfips-lib-fipsprov.o" => [
             "providers/fips/fipsprov.c"
         ],
@@ -24709,6 +26673,15 @@ our %unified_info = (
         ],
         "providers/implementations/ciphers/libdefault-lib-cipher_aes_gcm_hw.o" => [
             "providers/implementations/ciphers/cipher_aes_gcm_hw.c"
+        ],
+        "providers/implementations/ciphers/libdefault-lib-cipher_aes_gcm_siv.o" => [
+            "providers/implementations/ciphers/cipher_aes_gcm_siv.c"
+        ],
+        "providers/implementations/ciphers/libdefault-lib-cipher_aes_gcm_siv_hw.o" => [
+            "providers/implementations/ciphers/cipher_aes_gcm_siv_hw.c"
+        ],
+        "providers/implementations/ciphers/libdefault-lib-cipher_aes_gcm_siv_polyval.o" => [
+            "providers/implementations/ciphers/cipher_aes_gcm_siv_polyval.c"
         ],
         "providers/implementations/ciphers/libdefault-lib-cipher_aes_hw.o" => [
             "providers/implementations/ciphers/cipher_aes_hw.c"
@@ -24782,8 +26755,26 @@ our %unified_info = (
         "providers/implementations/ciphers/libdefault-lib-cipher_sm4.o" => [
             "providers/implementations/ciphers/cipher_sm4.c"
         ],
+        "providers/implementations/ciphers/libdefault-lib-cipher_sm4_ccm.o" => [
+            "providers/implementations/ciphers/cipher_sm4_ccm.c"
+        ],
+        "providers/implementations/ciphers/libdefault-lib-cipher_sm4_ccm_hw.o" => [
+            "providers/implementations/ciphers/cipher_sm4_ccm_hw.c"
+        ],
+        "providers/implementations/ciphers/libdefault-lib-cipher_sm4_gcm.o" => [
+            "providers/implementations/ciphers/cipher_sm4_gcm.c"
+        ],
+        "providers/implementations/ciphers/libdefault-lib-cipher_sm4_gcm_hw.o" => [
+            "providers/implementations/ciphers/cipher_sm4_gcm_hw.c"
+        ],
         "providers/implementations/ciphers/libdefault-lib-cipher_sm4_hw.o" => [
             "providers/implementations/ciphers/cipher_sm4_hw.c"
+        ],
+        "providers/implementations/ciphers/libdefault-lib-cipher_sm4_xts.o" => [
+            "providers/implementations/ciphers/cipher_sm4_xts.c"
+        ],
+        "providers/implementations/ciphers/libdefault-lib-cipher_sm4_xts_hw.o" => [
+            "providers/implementations/ciphers/cipher_sm4_xts_hw.c"
         ],
         "providers/implementations/ciphers/libdefault-lib-cipher_tdes.o" => [
             "providers/implementations/ciphers/cipher_tdes.c"
@@ -25004,6 +26995,15 @@ our %unified_info = (
         "providers/implementations/encode_decode/libdefault-lib-endecoder_common.o" => [
             "providers/implementations/encode_decode/endecoder_common.c"
         ],
+        "providers/implementations/encode_decode/libdefault-lib-ml_common_codecs.o" => [
+            "providers/implementations/encode_decode/ml_common_codecs.c"
+        ],
+        "providers/implementations/encode_decode/libdefault-lib-ml_dsa_codecs.o" => [
+            "providers/implementations/encode_decode/ml_dsa_codecs.c"
+        ],
+        "providers/implementations/encode_decode/libdefault-lib-ml_kem_codecs.o" => [
+            "providers/implementations/encode_decode/ml_kem_codecs.c"
+        ],
         "providers/implementations/exchange/libdefault-lib-dh_exch.o" => [
             "providers/implementations/exchange/dh_exch.c"
         ],
@@ -25028,8 +27028,14 @@ our %unified_info = (
         "providers/implementations/exchange/libfips-lib-kdf_exch.o" => [
             "providers/implementations/exchange/kdf_exch.c"
         ],
+        "providers/implementations/kdfs/libdefault-lib-argon2.o" => [
+            "providers/implementations/kdfs/argon2.c"
+        ],
         "providers/implementations/kdfs/libdefault-lib-hkdf.o" => [
             "providers/implementations/kdfs/hkdf.c"
+        ],
+        "providers/implementations/kdfs/libdefault-lib-hmacdrbg_kdf.o" => [
+            "providers/implementations/kdfs/hmacdrbg_kdf.c"
         ],
         "providers/implementations/kdfs/libdefault-lib-kbkdf.o" => [
             "providers/implementations/kdfs/kbkdf.c"
@@ -25088,11 +27094,38 @@ our %unified_info = (
         "providers/implementations/kdfs/liblegacy-lib-pbkdf1.o" => [
             "providers/implementations/kdfs/pbkdf1.c"
         ],
+        "providers/implementations/kdfs/liblegacy-lib-pvkkdf.o" => [
+            "providers/implementations/kdfs/pvkkdf.c"
+        ],
+        "providers/implementations/kem/libdefault-lib-ec_kem.o" => [
+            "providers/implementations/kem/ec_kem.c"
+        ],
+        "providers/implementations/kem/libdefault-lib-ecx_kem.o" => [
+            "providers/implementations/kem/ecx_kem.c"
+        ],
+        "providers/implementations/kem/libdefault-lib-kem_util.o" => [
+            "providers/implementations/kem/kem_util.c"
+        ],
+        "providers/implementations/kem/libdefault-lib-ml_kem_kem.o" => [
+            "providers/implementations/kem/ml_kem_kem.c"
+        ],
+        "providers/implementations/kem/libdefault-lib-mlx_kem.o" => [
+            "providers/implementations/kem/mlx_kem.c"
+        ],
         "providers/implementations/kem/libdefault-lib-rsa_kem.o" => [
             "providers/implementations/kem/rsa_kem.c"
         ],
+        "providers/implementations/kem/libfips-lib-ml_kem_kem.o" => [
+            "providers/implementations/kem/ml_kem_kem.c"
+        ],
+        "providers/implementations/kem/libfips-lib-mlx_kem.o" => [
+            "providers/implementations/kem/mlx_kem.c"
+        ],
         "providers/implementations/kem/libfips-lib-rsa_kem.o" => [
             "providers/implementations/kem/rsa_kem.c"
+        ],
+        "providers/implementations/kem/libtemplate-lib-template_kem.o" => [
+            "providers/implementations/kem/template_kem.c"
         ],
         "providers/implementations/keymgmt/libdefault-lib-dh_kmgmt.o" => [
             "providers/implementations/keymgmt/dh_kmgmt.c"
@@ -25112,8 +27145,20 @@ our %unified_info = (
         "providers/implementations/keymgmt/libdefault-lib-mac_legacy_kmgmt.o" => [
             "providers/implementations/keymgmt/mac_legacy_kmgmt.c"
         ],
+        "providers/implementations/keymgmt/libdefault-lib-ml_dsa_kmgmt.o" => [
+            "providers/implementations/keymgmt/ml_dsa_kmgmt.c"
+        ],
+        "providers/implementations/keymgmt/libdefault-lib-ml_kem_kmgmt.o" => [
+            "providers/implementations/keymgmt/ml_kem_kmgmt.c"
+        ],
+        "providers/implementations/keymgmt/libdefault-lib-mlx_kmgmt.o" => [
+            "providers/implementations/keymgmt/mlx_kmgmt.c"
+        ],
         "providers/implementations/keymgmt/libdefault-lib-rsa_kmgmt.o" => [
             "providers/implementations/keymgmt/rsa_kmgmt.c"
+        ],
+        "providers/implementations/keymgmt/libdefault-lib-slh_dsa_kmgmt.o" => [
+            "providers/implementations/keymgmt/slh_dsa_kmgmt.c"
         ],
         "providers/implementations/keymgmt/libfips-lib-dh_kmgmt.o" => [
             "providers/implementations/keymgmt/dh_kmgmt.c"
@@ -25133,8 +27178,23 @@ our %unified_info = (
         "providers/implementations/keymgmt/libfips-lib-mac_legacy_kmgmt.o" => [
             "providers/implementations/keymgmt/mac_legacy_kmgmt.c"
         ],
+        "providers/implementations/keymgmt/libfips-lib-ml_dsa_kmgmt.o" => [
+            "providers/implementations/keymgmt/ml_dsa_kmgmt.c"
+        ],
+        "providers/implementations/keymgmt/libfips-lib-ml_kem_kmgmt.o" => [
+            "providers/implementations/keymgmt/ml_kem_kmgmt.c"
+        ],
+        "providers/implementations/keymgmt/libfips-lib-mlx_kmgmt.o" => [
+            "providers/implementations/keymgmt/mlx_kmgmt.c"
+        ],
         "providers/implementations/keymgmt/libfips-lib-rsa_kmgmt.o" => [
             "providers/implementations/keymgmt/rsa_kmgmt.c"
+        ],
+        "providers/implementations/keymgmt/libfips-lib-slh_dsa_kmgmt.o" => [
+            "providers/implementations/keymgmt/slh_dsa_kmgmt.c"
+        ],
+        "providers/implementations/keymgmt/libtemplate-lib-template_kmgmt.o" => [
+            "providers/implementations/keymgmt/template_kmgmt.c"
         ],
         "providers/implementations/macs/libdefault-lib-blake2b_mac.o" => [
             "providers/implementations/macs/blake2b_mac.c"
@@ -25172,9 +27232,6 @@ our %unified_info = (
         "providers/implementations/macs/libfips-lib-kmac_prov.o" => [
             "providers/implementations/macs/kmac_prov.c"
         ],
-        "providers/implementations/rands/libdefault-lib-crngt.o" => [
-            "providers/implementations/rands/crngt.c"
-        ],
         "providers/implementations/rands/libdefault-lib-drbg.o" => [
             "providers/implementations/rands/drbg.c"
         ],
@@ -25190,11 +27247,11 @@ our %unified_info = (
         "providers/implementations/rands/libdefault-lib-seed_src.o" => [
             "providers/implementations/rands/seed_src.c"
         ],
+        "providers/implementations/rands/libdefault-lib-seed_src_jitter.o" => [
+            "providers/implementations/rands/seed_src_jitter.c"
+        ],
         "providers/implementations/rands/libdefault-lib-test_rng.o" => [
             "providers/implementations/rands/test_rng.c"
-        ],
-        "providers/implementations/rands/libfips-lib-crngt.o" => [
-            "providers/implementations/rands/crngt.c"
         ],
         "providers/implementations/rands/libfips-lib-drbg.o" => [
             "providers/implementations/rands/drbg.c"
@@ -25208,11 +27265,14 @@ our %unified_info = (
         "providers/implementations/rands/libfips-lib-drbg_hmac.o" => [
             "providers/implementations/rands/drbg_hmac.c"
         ],
+        "providers/implementations/rands/libfips-lib-fips_crng_test.o" => [
+            "providers/implementations/rands/fips_crng_test.c"
+        ],
         "providers/implementations/rands/libfips-lib-test_rng.o" => [
             "providers/implementations/rands/test_rng.c"
         ],
-        "providers/implementations/rands/seeding/libdefault-lib-rand_cpu_x86.o" => [
-            "providers/implementations/rands/seeding/rand_cpu_x86.c"
+        "providers/implementations/rands/seeding/libdefault-lib-rand_cpu_arm64.o" => [
+            "providers/implementations/rands/seeding/rand_cpu_arm64.c"
         ],
         "providers/implementations/rands/seeding/libdefault-lib-rand_tsc.o" => [
             "providers/implementations/rands/seeding/rand_tsc.c"
@@ -25235,8 +27295,14 @@ our %unified_info = (
         "providers/implementations/signature/libdefault-lib-mac_legacy_sig.o" => [
             "providers/implementations/signature/mac_legacy_sig.c"
         ],
+        "providers/implementations/signature/libdefault-lib-ml_dsa_sig.o" => [
+            "providers/implementations/signature/ml_dsa_sig.c"
+        ],
         "providers/implementations/signature/libdefault-lib-rsa_sig.o" => [
             "providers/implementations/signature/rsa_sig.c"
+        ],
+        "providers/implementations/signature/libdefault-lib-slh_dsa_sig.o" => [
+            "providers/implementations/signature/slh_dsa_sig.c"
         ],
         "providers/implementations/signature/libdefault-lib-sm2_sig.o" => [
             "providers/implementations/signature/sm2_sig.c"
@@ -25253,8 +27319,26 @@ our %unified_info = (
         "providers/implementations/signature/libfips-lib-mac_legacy_sig.o" => [
             "providers/implementations/signature/mac_legacy_sig.c"
         ],
+        "providers/implementations/signature/libfips-lib-ml_dsa_sig.o" => [
+            "providers/implementations/signature/ml_dsa_sig.c"
+        ],
         "providers/implementations/signature/libfips-lib-rsa_sig.o" => [
             "providers/implementations/signature/rsa_sig.c"
+        ],
+        "providers/implementations/signature/libfips-lib-slh_dsa_sig.o" => [
+            "providers/implementations/signature/slh_dsa_sig.c"
+        ],
+        "providers/implementations/skeymgmt/libdefault-lib-aes_skmgmt.o" => [
+            "providers/implementations/skeymgmt/aes_skmgmt.c"
+        ],
+        "providers/implementations/skeymgmt/libdefault-lib-generic.o" => [
+            "providers/implementations/skeymgmt/generic.c"
+        ],
+        "providers/implementations/skeymgmt/libfips-lib-aes_skmgmt.o" => [
+            "providers/implementations/skeymgmt/aes_skmgmt.c"
+        ],
+        "providers/implementations/skeymgmt/libfips-lib-generic.o" => [
+            "providers/implementations/skeymgmt/generic.c"
         ],
         "providers/implementations/storemgmt/libdefault-lib-file_store.o" => [
             "providers/implementations/storemgmt/file_store.c"
@@ -25279,8 +27363,12 @@ our %unified_info = (
             "providers/common/der/libcommon-lib-der_ec_sig.o",
             "providers/common/der/libcommon-lib-der_ecx_gen.o",
             "providers/common/der/libcommon-lib-der_ecx_key.o",
+            "providers/common/der/libcommon-lib-der_ml_dsa_gen.o",
+            "providers/common/der/libcommon-lib-der_ml_dsa_key.o",
             "providers/common/der/libcommon-lib-der_rsa_gen.o",
             "providers/common/der/libcommon-lib-der_rsa_key.o",
+            "providers/common/der/libcommon-lib-der_slh_dsa_gen.o",
+            "providers/common/der/libcommon-lib-der_slh_dsa_key.o",
             "providers/common/der/libcommon-lib-der_wrap_gen.o",
             "providers/common/libcommon-lib-provider_ctx.o",
             "providers/common/libcommon-lib-provider_err.o",
@@ -25292,7 +27380,7 @@ our %unified_info = (
             "providers/implementations/ciphers/libcommon-lib-ciphercommon_gcm_hw.o",
             "providers/implementations/ciphers/libcommon-lib-ciphercommon_hw.o",
             "providers/implementations/digests/libcommon-lib-digestcommon.o",
-            "ssl/record/libcommon-lib-tls_pad.o"
+            "ssl/record/methods/libcommon-lib-tls_pad.o"
         ],
         "providers/libcrypto-lib-baseprov.o" => [
             "providers/baseprov.c"
@@ -25328,6 +27416,9 @@ our %unified_info = (
             "providers/implementations/ciphers/libdefault-lib-cipher_aes_ccm_hw.o",
             "providers/implementations/ciphers/libdefault-lib-cipher_aes_gcm.o",
             "providers/implementations/ciphers/libdefault-lib-cipher_aes_gcm_hw.o",
+            "providers/implementations/ciphers/libdefault-lib-cipher_aes_gcm_siv.o",
+            "providers/implementations/ciphers/libdefault-lib-cipher_aes_gcm_siv_hw.o",
+            "providers/implementations/ciphers/libdefault-lib-cipher_aes_gcm_siv_polyval.o",
             "providers/implementations/ciphers/libdefault-lib-cipher_aes_hw.o",
             "providers/implementations/ciphers/libdefault-lib-cipher_aes_ocb.o",
             "providers/implementations/ciphers/libdefault-lib-cipher_aes_ocb_hw.o",
@@ -25352,7 +27443,13 @@ our %unified_info = (
             "providers/implementations/ciphers/libdefault-lib-cipher_cts.o",
             "providers/implementations/ciphers/libdefault-lib-cipher_null.o",
             "providers/implementations/ciphers/libdefault-lib-cipher_sm4.o",
+            "providers/implementations/ciphers/libdefault-lib-cipher_sm4_ccm.o",
+            "providers/implementations/ciphers/libdefault-lib-cipher_sm4_ccm_hw.o",
+            "providers/implementations/ciphers/libdefault-lib-cipher_sm4_gcm.o",
+            "providers/implementations/ciphers/libdefault-lib-cipher_sm4_gcm_hw.o",
             "providers/implementations/ciphers/libdefault-lib-cipher_sm4_hw.o",
+            "providers/implementations/ciphers/libdefault-lib-cipher_sm4_xts.o",
+            "providers/implementations/ciphers/libdefault-lib-cipher_sm4_xts_hw.o",
             "providers/implementations/ciphers/libdefault-lib-cipher_tdes.o",
             "providers/implementations/ciphers/libdefault-lib-cipher_tdes_common.o",
             "providers/implementations/ciphers/libdefault-lib-cipher_tdes_default.o",
@@ -25381,11 +27478,16 @@ our %unified_info = (
             "providers/implementations/encode_decode/libdefault-lib-encode_key2ms.o",
             "providers/implementations/encode_decode/libdefault-lib-encode_key2text.o",
             "providers/implementations/encode_decode/libdefault-lib-endecoder_common.o",
+            "providers/implementations/encode_decode/libdefault-lib-ml_common_codecs.o",
+            "providers/implementations/encode_decode/libdefault-lib-ml_dsa_codecs.o",
+            "providers/implementations/encode_decode/libdefault-lib-ml_kem_codecs.o",
             "providers/implementations/exchange/libdefault-lib-dh_exch.o",
             "providers/implementations/exchange/libdefault-lib-ecdh_exch.o",
             "providers/implementations/exchange/libdefault-lib-ecx_exch.o",
             "providers/implementations/exchange/libdefault-lib-kdf_exch.o",
+            "providers/implementations/kdfs/libdefault-lib-argon2.o",
             "providers/implementations/kdfs/libdefault-lib-hkdf.o",
+            "providers/implementations/kdfs/libdefault-lib-hmacdrbg_kdf.o",
             "providers/implementations/kdfs/libdefault-lib-kbkdf.o",
             "providers/implementations/kdfs/libdefault-lib-krb5kdf.o",
             "providers/implementations/kdfs/libdefault-lib-pbkdf2.o",
@@ -25396,6 +27498,11 @@ our %unified_info = (
             "providers/implementations/kdfs/libdefault-lib-sskdf.o",
             "providers/implementations/kdfs/libdefault-lib-tls1_prf.o",
             "providers/implementations/kdfs/libdefault-lib-x942kdf.o",
+            "providers/implementations/kem/libdefault-lib-ec_kem.o",
+            "providers/implementations/kem/libdefault-lib-ecx_kem.o",
+            "providers/implementations/kem/libdefault-lib-kem_util.o",
+            "providers/implementations/kem/libdefault-lib-ml_kem_kem.o",
+            "providers/implementations/kem/libdefault-lib-mlx_kem.o",
             "providers/implementations/kem/libdefault-lib-rsa_kem.o",
             "providers/implementations/keymgmt/libdefault-lib-dh_kmgmt.o",
             "providers/implementations/keymgmt/libdefault-lib-dsa_kmgmt.o",
@@ -25403,7 +27510,11 @@ our %unified_info = (
             "providers/implementations/keymgmt/libdefault-lib-ecx_kmgmt.o",
             "providers/implementations/keymgmt/libdefault-lib-kdf_legacy_kmgmt.o",
             "providers/implementations/keymgmt/libdefault-lib-mac_legacy_kmgmt.o",
+            "providers/implementations/keymgmt/libdefault-lib-ml_dsa_kmgmt.o",
+            "providers/implementations/keymgmt/libdefault-lib-ml_kem_kmgmt.o",
+            "providers/implementations/keymgmt/libdefault-lib-mlx_kmgmt.o",
             "providers/implementations/keymgmt/libdefault-lib-rsa_kmgmt.o",
+            "providers/implementations/keymgmt/libdefault-lib-slh_dsa_kmgmt.o",
             "providers/implementations/macs/libdefault-lib-blake2b_mac.o",
             "providers/implementations/macs/libdefault-lib-blake2s_mac.o",
             "providers/implementations/macs/libdefault-lib-cmac_prov.o",
@@ -25412,14 +27523,14 @@ our %unified_info = (
             "providers/implementations/macs/libdefault-lib-kmac_prov.o",
             "providers/implementations/macs/libdefault-lib-poly1305_prov.o",
             "providers/implementations/macs/libdefault-lib-siphash_prov.o",
-            "providers/implementations/rands/libdefault-lib-crngt.o",
             "providers/implementations/rands/libdefault-lib-drbg.o",
             "providers/implementations/rands/libdefault-lib-drbg_ctr.o",
             "providers/implementations/rands/libdefault-lib-drbg_hash.o",
             "providers/implementations/rands/libdefault-lib-drbg_hmac.o",
             "providers/implementations/rands/libdefault-lib-seed_src.o",
+            "providers/implementations/rands/libdefault-lib-seed_src_jitter.o",
             "providers/implementations/rands/libdefault-lib-test_rng.o",
-            "providers/implementations/rands/seeding/libdefault-lib-rand_cpu_x86.o",
+            "providers/implementations/rands/seeding/libdefault-lib-rand_cpu_arm64.o",
             "providers/implementations/rands/seeding/libdefault-lib-rand_tsc.o",
             "providers/implementations/rands/seeding/libdefault-lib-rand_unix.o",
             "providers/implementations/rands/seeding/libdefault-lib-rand_win.o",
@@ -25427,11 +27538,15 @@ our %unified_info = (
             "providers/implementations/signature/libdefault-lib-ecdsa_sig.o",
             "providers/implementations/signature/libdefault-lib-eddsa_sig.o",
             "providers/implementations/signature/libdefault-lib-mac_legacy_sig.o",
+            "providers/implementations/signature/libdefault-lib-ml_dsa_sig.o",
             "providers/implementations/signature/libdefault-lib-rsa_sig.o",
+            "providers/implementations/signature/libdefault-lib-slh_dsa_sig.o",
             "providers/implementations/signature/libdefault-lib-sm2_sig.o",
+            "providers/implementations/skeymgmt/libdefault-lib-aes_skmgmt.o",
+            "providers/implementations/skeymgmt/libdefault-lib-generic.o",
             "providers/implementations/storemgmt/libdefault-lib-file_store.o",
             "providers/implementations/storemgmt/libdefault-lib-file_store_any2obj.o",
-            "ssl/libdefault-lib-s3_cbc.o"
+            "ssl/record/methods/libdefault-lib-ssl3_cbc.o"
         ],
         "providers/libfips.a" => [
             "crypto/aes/libfips-lib-aes_cbc.o",
@@ -25439,6 +27554,7 @@ our %unified_info = (
             "crypto/aes/libfips-lib-aes_ecb.o",
             "crypto/aes/libfips-lib-aes_misc.o",
             "crypto/aes/libfips-lib-aesv8-armx.o",
+            "crypto/aes/libfips-lib-bsaes-armv8.o",
             "crypto/aes/libfips-lib-vpaes-armv8.o",
             "crypto/bn/libfips-lib-armv8-mont.o",
             "crypto/bn/libfips-lib-bn_add.o",
@@ -25520,6 +27636,9 @@ our %unified_info = (
             "crypto/ec/libfips-lib-ecp_nistz256-armv8.o",
             "crypto/ec/libfips-lib-ecp_nistz256.o",
             "crypto/ec/libfips-lib-ecp_oct.o",
+            "crypto/ec/libfips-lib-ecp_sm2p256-armv8.o",
+            "crypto/ec/libfips-lib-ecp_sm2p256.o",
+            "crypto/ec/libfips-lib-ecp_sm2p256_table.o",
             "crypto/ec/libfips-lib-ecp_smpl.o",
             "crypto/ec/libfips-lib-ecx_backend.o",
             "crypto/ec/libfips-lib-ecx_key.o",
@@ -25538,14 +27657,15 @@ our %unified_info = (
             "crypto/evp/libfips-lib-kem.o",
             "crypto/evp/libfips-lib-keymgmt_lib.o",
             "crypto/evp/libfips-lib-keymgmt_meth.o",
-            "crypto/evp/libfips-lib-m_sigver.o",
             "crypto/evp/libfips-lib-mac_lib.o",
             "crypto/evp/libfips-lib-mac_meth.o",
             "crypto/evp/libfips-lib-p_lib.o",
             "crypto/evp/libfips-lib-pmeth_check.o",
             "crypto/evp/libfips-lib-pmeth_gn.o",
             "crypto/evp/libfips-lib-pmeth_lib.o",
+            "crypto/evp/libfips-lib-s_lib.o",
             "crypto/evp/libfips-lib-signature.o",
+            "crypto/evp/libfips-lib-skeymgmt_meth.o",
             "crypto/ffc/libfips-lib-ffc_backend.o",
             "crypto/ffc/libfips-lib-ffc_dh.o",
             "crypto/ffc/libfips-lib-ffc_key_generate.o",
@@ -25553,6 +27673,8 @@ our %unified_info = (
             "crypto/ffc/libfips-lib-ffc_params.o",
             "crypto/ffc/libfips-lib-ffc_params_generate.o",
             "crypto/ffc/libfips-lib-ffc_params_validate.o",
+            "crypto/hashtable/libfips-lib-hashfunc.o",
+            "crypto/hashtable/libfips-lib-hashtable.o",
             "crypto/hmac/libfips-lib-hmac.o",
             "crypto/lhash/libfips-lib-lhash.o",
             "crypto/libfips-lib-arm64cpuid.o",
@@ -25576,6 +27698,7 @@ our %unified_info = (
             "crypto/libfips-lib-params.o",
             "crypto/libfips-lib-params_dup.o",
             "crypto/libfips-lib-params_from_text.o",
+            "crypto/libfips-lib-params_idx.o",
             "crypto/libfips-lib-provider_core.o",
             "crypto/libfips-lib-provider_predefined.o",
             "crypto/libfips-lib-self_test_core.o",
@@ -25584,6 +27707,17 @@ our %unified_info = (
             "crypto/libfips-lib-threads_none.o",
             "crypto/libfips-lib-threads_pthread.o",
             "crypto/libfips-lib-threads_win.o",
+            "crypto/libfips-lib-time.o",
+            "crypto/ml_dsa/libfips-lib-ml_dsa_encoders.o",
+            "crypto/ml_dsa/libfips-lib-ml_dsa_key.o",
+            "crypto/ml_dsa/libfips-lib-ml_dsa_key_compress.o",
+            "crypto/ml_dsa/libfips-lib-ml_dsa_matrix.o",
+            "crypto/ml_dsa/libfips-lib-ml_dsa_ntt.o",
+            "crypto/ml_dsa/libfips-lib-ml_dsa_params.o",
+            "crypto/ml_dsa/libfips-lib-ml_dsa_sample.o",
+            "crypto/ml_dsa/libfips-lib-ml_dsa_sign.o",
+            "crypto/ml_kem/libfips-lib-ml_kem.o",
+            "crypto/modes/libfips-lib-aes-gcm-armv8-unroll8_64.o",
             "crypto/modes/libfips-lib-aes-gcm-armv8_64.o",
             "crypto/modes/libfips-lib-cbc128.o",
             "crypto/modes/libfips-lib-ccm128.o",
@@ -25594,6 +27728,7 @@ our %unified_info = (
             "crypto/modes/libfips-lib-ofb128.o",
             "crypto/modes/libfips-lib-wrap128.o",
             "crypto/modes/libfips-lib-xts128.o",
+            "crypto/modes/libfips-lib-xts128gb.o",
             "crypto/property/libfips-lib-defn_cache.o",
             "crypto/property/libfips-lib-property.o",
             "crypto/property/libfips-lib-property_parse.o",
@@ -25625,7 +27760,23 @@ our %unified_info = (
             "crypto/sha/libfips-lib-sha3.o",
             "crypto/sha/libfips-lib-sha512-armv8.o",
             "crypto/sha/libfips-lib-sha512.o",
+            "crypto/slh_dsa/libfips-lib-slh_adrs.o",
+            "crypto/slh_dsa/libfips-lib-slh_dsa.o",
+            "crypto/slh_dsa/libfips-lib-slh_dsa_hash_ctx.o",
+            "crypto/slh_dsa/libfips-lib-slh_dsa_key.o",
+            "crypto/slh_dsa/libfips-lib-slh_fors.o",
+            "crypto/slh_dsa/libfips-lib-slh_hash.o",
+            "crypto/slh_dsa/libfips-lib-slh_hypertree.o",
+            "crypto/slh_dsa/libfips-lib-slh_params.o",
+            "crypto/slh_dsa/libfips-lib-slh_wots.o",
+            "crypto/slh_dsa/libfips-lib-slh_xmss.o",
             "crypto/stack/libfips-lib-stack.o",
+            "crypto/thread/arch/libfips-lib-thread_none.o",
+            "crypto/thread/arch/libfips-lib-thread_posix.o",
+            "crypto/thread/arch/libfips-lib-thread_win.o",
+            "crypto/thread/libfips-lib-api.o",
+            "crypto/thread/libfips-lib-arch.o",
+            "crypto/thread/libfips-lib-internal.o",
             "providers/common/der/libfips-lib-der_rsa_sig.o",
             "providers/common/libfips-lib-bio_prov.o",
             "providers/common/libfips-lib-capabilities.o",
@@ -25634,6 +27785,7 @@ our %unified_info = (
             "providers/common/libfips-lib-provider_util.o",
             "providers/common/libfips-lib-securitycheck.o",
             "providers/common/libfips-lib-securitycheck_fips.o",
+            "providers/fips/libfips-lib-fipsindicator.o",
             "providers/fips/libfips-lib-fipsprov.o",
             "providers/fips/libfips-lib-self_test.o",
             "providers/fips/libfips-lib-self_test_kats.o",
@@ -25671,6 +27823,8 @@ our %unified_info = (
             "providers/implementations/kdfs/libfips-lib-sskdf.o",
             "providers/implementations/kdfs/libfips-lib-tls1_prf.o",
             "providers/implementations/kdfs/libfips-lib-x942kdf.o",
+            "providers/implementations/kem/libfips-lib-ml_kem_kem.o",
+            "providers/implementations/kem/libfips-lib-mlx_kem.o",
             "providers/implementations/kem/libfips-lib-rsa_kem.o",
             "providers/implementations/keymgmt/libfips-lib-dh_kmgmt.o",
             "providers/implementations/keymgmt/libfips-lib-dsa_kmgmt.o",
@@ -25678,24 +27832,32 @@ our %unified_info = (
             "providers/implementations/keymgmt/libfips-lib-ecx_kmgmt.o",
             "providers/implementations/keymgmt/libfips-lib-kdf_legacy_kmgmt.o",
             "providers/implementations/keymgmt/libfips-lib-mac_legacy_kmgmt.o",
+            "providers/implementations/keymgmt/libfips-lib-ml_dsa_kmgmt.o",
+            "providers/implementations/keymgmt/libfips-lib-ml_kem_kmgmt.o",
+            "providers/implementations/keymgmt/libfips-lib-mlx_kmgmt.o",
             "providers/implementations/keymgmt/libfips-lib-rsa_kmgmt.o",
+            "providers/implementations/keymgmt/libfips-lib-slh_dsa_kmgmt.o",
             "providers/implementations/macs/libfips-lib-cmac_prov.o",
             "providers/implementations/macs/libfips-lib-gmac_prov.o",
             "providers/implementations/macs/libfips-lib-hmac_prov.o",
             "providers/implementations/macs/libfips-lib-kmac_prov.o",
-            "providers/implementations/rands/libfips-lib-crngt.o",
             "providers/implementations/rands/libfips-lib-drbg.o",
             "providers/implementations/rands/libfips-lib-drbg_ctr.o",
             "providers/implementations/rands/libfips-lib-drbg_hash.o",
             "providers/implementations/rands/libfips-lib-drbg_hmac.o",
+            "providers/implementations/rands/libfips-lib-fips_crng_test.o",
             "providers/implementations/rands/libfips-lib-test_rng.o",
             "providers/implementations/signature/libfips-lib-dsa_sig.o",
             "providers/implementations/signature/libfips-lib-ecdsa_sig.o",
             "providers/implementations/signature/libfips-lib-eddsa_sig.o",
             "providers/implementations/signature/libfips-lib-mac_legacy_sig.o",
+            "providers/implementations/signature/libfips-lib-ml_dsa_sig.o",
             "providers/implementations/signature/libfips-lib-rsa_sig.o",
+            "providers/implementations/signature/libfips-lib-slh_dsa_sig.o",
+            "providers/implementations/skeymgmt/libfips-lib-aes_skmgmt.o",
+            "providers/implementations/skeymgmt/libfips-lib-generic.o",
             "providers/libcommon.a",
-            "ssl/libfips-lib-s3_cbc.o"
+            "ssl/record/methods/libfips-lib-ssl3_cbc.o"
         ],
         "providers/liblegacy-lib-prov_running.o" => [
             "providers/prov_running.c"
@@ -25725,13 +27887,12 @@ our %unified_info = (
             "providers/implementations/digests/liblegacy-lib-ripemd_prov.o",
             "providers/implementations/digests/liblegacy-lib-wp_prov.o",
             "providers/implementations/kdfs/liblegacy-lib-pbkdf1.o",
+            "providers/implementations/kdfs/liblegacy-lib-pvkkdf.o",
             "providers/liblegacy-lib-prov_running.o"
         ],
-        "ssl/libdefault-lib-s3_cbc.o" => [
-            "ssl/s3_cbc.c"
-        ],
-        "ssl/libfips-lib-s3_cbc.o" => [
-            "ssl/s3_cbc.c"
+        "providers/libtemplate.a" => [
+            "providers/implementations/kem/libtemplate-lib-template_kem.o",
+            "providers/implementations/keymgmt/libtemplate-lib-template_kmgmt.o"
         ],
         "ssl/libssl-lib-bio_ssl.o" => [
             "ssl/bio_ssl.c"
@@ -25751,6 +27912,9 @@ our %unified_info = (
         "ssl/libssl-lib-pqueue.o" => [
             "ssl/pqueue.c"
         ],
+        "ssl/libssl-lib-priority_queue.o" => [
+            "ssl/priority_queue.c"
+        ],
         "ssl/libssl-lib-s3_enc.o" => [
             "ssl/s3_enc.c"
         ],
@@ -25766,14 +27930,14 @@ our %unified_info = (
         "ssl/libssl-lib-ssl_cert.o" => [
             "ssl/ssl_cert.c"
         ],
+        "ssl/libssl-lib-ssl_cert_comp.o" => [
+            "ssl/ssl_cert_comp.c"
+        ],
         "ssl/libssl-lib-ssl_ciph.o" => [
             "ssl/ssl_ciph.c"
         ],
         "ssl/libssl-lib-ssl_conf.o" => [
             "ssl/ssl_conf.c"
-        ],
-        "ssl/libssl-lib-ssl_err.o" => [
-            "ssl/ssl_err.c"
         ],
         "ssl/libssl-lib-ssl_err_legacy.o" => [
             "ssl/ssl_err_legacy.c"
@@ -25823,11 +27987,131 @@ our %unified_info = (
         "ssl/libssl-lib-tls_srp.o" => [
             "ssl/tls_srp.c"
         ],
-        "ssl/record/libcommon-lib-tls_pad.o" => [
-            "ssl/record/tls_pad.c"
+        "ssl/quic/libssl-lib-cc_newreno.o" => [
+            "ssl/quic/cc_newreno.c"
         ],
-        "ssl/record/libssl-lib-dtls1_bitmap.o" => [
-            "ssl/record/dtls1_bitmap.c"
+        "ssl/quic/libssl-lib-json_enc.o" => [
+            "ssl/quic/json_enc.c"
+        ],
+        "ssl/quic/libssl-lib-qlog.o" => [
+            "ssl/quic/qlog.c"
+        ],
+        "ssl/quic/libssl-lib-qlog_event_helpers.o" => [
+            "ssl/quic/qlog_event_helpers.c"
+        ],
+        "ssl/quic/libssl-lib-quic_ackm.o" => [
+            "ssl/quic/quic_ackm.c"
+        ],
+        "ssl/quic/libssl-lib-quic_cfq.o" => [
+            "ssl/quic/quic_cfq.c"
+        ],
+        "ssl/quic/libssl-lib-quic_channel.o" => [
+            "ssl/quic/quic_channel.c"
+        ],
+        "ssl/quic/libssl-lib-quic_demux.o" => [
+            "ssl/quic/quic_demux.c"
+        ],
+        "ssl/quic/libssl-lib-quic_engine.o" => [
+            "ssl/quic/quic_engine.c"
+        ],
+        "ssl/quic/libssl-lib-quic_fc.o" => [
+            "ssl/quic/quic_fc.c"
+        ],
+        "ssl/quic/libssl-lib-quic_fifd.o" => [
+            "ssl/quic/quic_fifd.c"
+        ],
+        "ssl/quic/libssl-lib-quic_impl.o" => [
+            "ssl/quic/quic_impl.c"
+        ],
+        "ssl/quic/libssl-lib-quic_lcidm.o" => [
+            "ssl/quic/quic_lcidm.c"
+        ],
+        "ssl/quic/libssl-lib-quic_method.o" => [
+            "ssl/quic/quic_method.c"
+        ],
+        "ssl/quic/libssl-lib-quic_obj.o" => [
+            "ssl/quic/quic_obj.c"
+        ],
+        "ssl/quic/libssl-lib-quic_port.o" => [
+            "ssl/quic/quic_port.c"
+        ],
+        "ssl/quic/libssl-lib-quic_rcidm.o" => [
+            "ssl/quic/quic_rcidm.c"
+        ],
+        "ssl/quic/libssl-lib-quic_reactor.o" => [
+            "ssl/quic/quic_reactor.c"
+        ],
+        "ssl/quic/libssl-lib-quic_reactor_wait_ctx.o" => [
+            "ssl/quic/quic_reactor_wait_ctx.c"
+        ],
+        "ssl/quic/libssl-lib-quic_record_rx.o" => [
+            "ssl/quic/quic_record_rx.c"
+        ],
+        "ssl/quic/libssl-lib-quic_record_shared.o" => [
+            "ssl/quic/quic_record_shared.c"
+        ],
+        "ssl/quic/libssl-lib-quic_record_tx.o" => [
+            "ssl/quic/quic_record_tx.c"
+        ],
+        "ssl/quic/libssl-lib-quic_record_util.o" => [
+            "ssl/quic/quic_record_util.c"
+        ],
+        "ssl/quic/libssl-lib-quic_rstream.o" => [
+            "ssl/quic/quic_rstream.c"
+        ],
+        "ssl/quic/libssl-lib-quic_rx_depack.o" => [
+            "ssl/quic/quic_rx_depack.c"
+        ],
+        "ssl/quic/libssl-lib-quic_sf_list.o" => [
+            "ssl/quic/quic_sf_list.c"
+        ],
+        "ssl/quic/libssl-lib-quic_srt_gen.o" => [
+            "ssl/quic/quic_srt_gen.c"
+        ],
+        "ssl/quic/libssl-lib-quic_srtm.o" => [
+            "ssl/quic/quic_srtm.c"
+        ],
+        "ssl/quic/libssl-lib-quic_sstream.o" => [
+            "ssl/quic/quic_sstream.c"
+        ],
+        "ssl/quic/libssl-lib-quic_statm.o" => [
+            "ssl/quic/quic_statm.c"
+        ],
+        "ssl/quic/libssl-lib-quic_stream_map.o" => [
+            "ssl/quic/quic_stream_map.c"
+        ],
+        "ssl/quic/libssl-lib-quic_thread_assist.o" => [
+            "ssl/quic/quic_thread_assist.c"
+        ],
+        "ssl/quic/libssl-lib-quic_tls.o" => [
+            "ssl/quic/quic_tls.c"
+        ],
+        "ssl/quic/libssl-lib-quic_tls_api.o" => [
+            "ssl/quic/quic_tls_api.c"
+        ],
+        "ssl/quic/libssl-lib-quic_trace.o" => [
+            "ssl/quic/quic_trace.c"
+        ],
+        "ssl/quic/libssl-lib-quic_tserver.o" => [
+            "ssl/quic/quic_tserver.c"
+        ],
+        "ssl/quic/libssl-lib-quic_txp.o" => [
+            "ssl/quic/quic_txp.c"
+        ],
+        "ssl/quic/libssl-lib-quic_txpim.o" => [
+            "ssl/quic/quic_txpim.c"
+        ],
+        "ssl/quic/libssl-lib-quic_types.o" => [
+            "ssl/quic/quic_types.c"
+        ],
+        "ssl/quic/libssl-lib-quic_wire.o" => [
+            "ssl/quic/quic_wire.c"
+        ],
+        "ssl/quic/libssl-lib-quic_wire_pkt.o" => [
+            "ssl/quic/quic_wire_pkt.c"
+        ],
+        "ssl/quic/libssl-lib-uint_set.o" => [
+            "ssl/quic/uint_set.c"
         ],
         "ssl/record/libssl-lib-rec_layer_d1.o" => [
             "ssl/record/rec_layer_d1.c"
@@ -25835,14 +28119,44 @@ our %unified_info = (
         "ssl/record/libssl-lib-rec_layer_s3.o" => [
             "ssl/record/rec_layer_s3.c"
         ],
-        "ssl/record/libssl-lib-ssl3_buffer.o" => [
-            "ssl/record/ssl3_buffer.c"
+        "ssl/record/methods/libcommon-lib-tls_pad.o" => [
+            "ssl/record/methods/tls_pad.c"
         ],
-        "ssl/record/libssl-lib-ssl3_record.o" => [
-            "ssl/record/ssl3_record.c"
+        "ssl/record/methods/libdefault-lib-ssl3_cbc.o" => [
+            "ssl/record/methods/ssl3_cbc.c"
         ],
-        "ssl/record/libssl-lib-ssl3_record_tls13.o" => [
-            "ssl/record/ssl3_record_tls13.c"
+        "ssl/record/methods/libfips-lib-ssl3_cbc.o" => [
+            "ssl/record/methods/ssl3_cbc.c"
+        ],
+        "ssl/record/methods/libssl-lib-dtls_meth.o" => [
+            "ssl/record/methods/dtls_meth.c"
+        ],
+        "ssl/record/methods/libssl-lib-ssl3_meth.o" => [
+            "ssl/record/methods/ssl3_meth.c"
+        ],
+        "ssl/record/methods/libssl-lib-tls13_meth.o" => [
+            "ssl/record/methods/tls13_meth.c"
+        ],
+        "ssl/record/methods/libssl-lib-tls1_meth.o" => [
+            "ssl/record/methods/tls1_meth.c"
+        ],
+        "ssl/record/methods/libssl-lib-tls_common.o" => [
+            "ssl/record/methods/tls_common.c"
+        ],
+        "ssl/record/methods/libssl-lib-tls_multib.o" => [
+            "ssl/record/methods/tls_multib.c"
+        ],
+        "ssl/record/methods/libssl-lib-tlsany_meth.o" => [
+            "ssl/record/methods/tlsany_meth.c"
+        ],
+        "ssl/rio/libssl-lib-poll_builder.o" => [
+            "ssl/rio/poll_builder.c"
+        ],
+        "ssl/rio/libssl-lib-poll_immediate.o" => [
+            "ssl/rio/poll_immediate.c"
+        ],
+        "ssl/rio/libssl-lib-rio_notifier.o" => [
+            "ssl/rio/rio_notifier.c"
         ],
         "ssl/statem/libssl-lib-extensions.o" => [
             "ssl/statem/extensions.c"
@@ -26058,6 +28372,12 @@ our %unified_info = (
         "test/buildtest_c_buffer-bin-buildtest_buffer.o" => [
             "test/buildtest_buffer.c"
         ],
+        "test/buildtest_c_byteorder" => [
+            "test/buildtest_c_byteorder-bin-buildtest_byteorder.o"
+        ],
+        "test/buildtest_c_byteorder-bin-buildtest_byteorder.o" => [
+            "test/buildtest_byteorder.c"
+        ],
         "test/buildtest_c_camellia" => [
             "test/buildtest_c_camellia-bin-buildtest_camellia.o"
         ],
@@ -26106,12 +28426,6 @@ our %unified_info = (
         "test/buildtest_c_core_dispatch-bin-buildtest_core_dispatch.o" => [
             "test/buildtest_core_dispatch.c"
         ],
-        "test/buildtest_c_core_names" => [
-            "test/buildtest_c_core_names-bin-buildtest_core_names.o"
-        ],
-        "test/buildtest_c_core_names-bin-buildtest_core_names.o" => [
-            "test/buildtest_core_names.c"
-        ],
         "test/buildtest_c_core_object" => [
             "test/buildtest_c_core_object-bin-buildtest_core_object.o"
         ],
@@ -26159,6 +28473,12 @@ our %unified_info = (
         ],
         "test/buildtest_c_e_os2-bin-buildtest_e_os2.o" => [
             "test/buildtest_e_os2.c"
+        ],
+        "test/buildtest_c_e_ostime" => [
+            "test/buildtest_c_e_ostime-bin-buildtest_e_ostime.o"
+        ],
+        "test/buildtest_c_e_ostime-bin-buildtest_e_ostime.o" => [
+            "test/buildtest_e_ostime.c"
         ],
         "test/buildtest_c_ebcdic" => [
             "test/buildtest_c_ebcdic-bin-buildtest_ebcdic.o"
@@ -26214,6 +28534,12 @@ our %unified_info = (
         "test/buildtest_c_hmac-bin-buildtest_hmac.o" => [
             "test/buildtest_hmac.c"
         ],
+        "test/buildtest_c_hpke" => [
+            "test/buildtest_c_hpke-bin-buildtest_hpke.o"
+        ],
+        "test/buildtest_c_hpke-bin-buildtest_hpke.o" => [
+            "test/buildtest_hpke.c"
+        ],
         "test/buildtest_c_http" => [
             "test/buildtest_c_http-bin-buildtest_http.o"
         ],
@@ -26225,6 +28551,12 @@ our %unified_info = (
         ],
         "test/buildtest_c_idea-bin-buildtest_idea.o" => [
             "test/buildtest_idea.c"
+        ],
+        "test/buildtest_c_indicator" => [
+            "test/buildtest_c_indicator-bin-buildtest_indicator.o"
+        ],
+        "test/buildtest_c_indicator-bin-buildtest_indicator.o" => [
+            "test/buildtest_indicator.c"
         ],
         "test/buildtest_c_kdf" => [
             "test/buildtest_c_kdf-bin-buildtest_kdf.o"
@@ -26255,6 +28587,12 @@ our %unified_info = (
         ],
         "test/buildtest_c_mdc2-bin-buildtest_mdc2.o" => [
             "test/buildtest_mdc2.c"
+        ],
+        "test/buildtest_c_ml_kem" => [
+            "test/buildtest_c_ml_kem-bin-buildtest_ml_kem.o"
+        ],
+        "test/buildtest_c_ml_kem-bin-buildtest_ml_kem.o" => [
+            "test/buildtest_ml_kem.c"
         ],
         "test/buildtest_c_modes" => [
             "test/buildtest_c_modes-bin-buildtest_modes.o"
@@ -26315,6 +28653,12 @@ our %unified_info = (
         ],
         "test/buildtest_c_provider-bin-buildtest_provider.o" => [
             "test/buildtest_provider.c"
+        ],
+        "test/buildtest_c_quic" => [
+            "test/buildtest_c_quic-bin-buildtest_quic.o"
+        ],
+        "test/buildtest_c_quic-bin-buildtest_quic.o" => [
+            "test/buildtest_quic.c"
         ],
         "test/buildtest_c_rand" => [
             "test/buildtest_c_rand-bin-buildtest_rand.o"
@@ -26399,6 +28743,12 @@ our %unified_info = (
         ],
         "test/buildtest_c_symhacks-bin-buildtest_symhacks.o" => [
             "test/buildtest_symhacks.c"
+        ],
+        "test/buildtest_c_thread" => [
+            "test/buildtest_c_thread-bin-buildtest_thread.o"
+        ],
+        "test/buildtest_c_thread-bin-buildtest_thread.o" => [
+            "test/buildtest_thread.c"
         ],
         "test/buildtest_c_tls1" => [
             "test/buildtest_c_tls1-bin-buildtest_tls1.o"
@@ -27604,6 +29954,7 @@ my @makevars = (
     "LDLIBS",
     "MT",
     "MTFLAGS",
+    "OBJCOPY",
     "PERL",
     "RANLIB",
     "RC",
@@ -27617,6 +29968,12 @@ my %disabled_info = (
     "asan" => {
         "macro" => "OPENSSL_NO_ASAN"
     },
+    "brotli" => {
+        "macro" => "OPENSSL_NO_BROTLI"
+    },
+    "brotli-dynamic" => {
+        "macro" => "OPENSSL_NO_BROTLI_DYNAMIC"
+    },
     "comp" => {
         "macro" => "OPENSSL_NO_COMP",
         "skipped" => [
@@ -27628,6 +29985,9 @@ my %disabled_info = (
     },
     "crypto-mdebug-backtrace" => {
         "macro" => "OPENSSL_NO_CRYPTO_MDEBUG_BACKTRACE"
+    },
+    "demos" => {
+        "macro" => "OPENSSL_NO_DEMOS"
     },
     "devcryptoeng" => {
         "macro" => "OPENSSL_NO_DEVCRYPTOENG"
@@ -27641,11 +30001,23 @@ my %disabled_info = (
     "external-tests" => {
         "macro" => "OPENSSL_NO_EXTERNAL_TESTS"
     },
+    "fips-jitter" => {
+        "macro" => "OPENSSL_NO_FIPS_JITTER"
+    },
     "fuzz-afl" => {
         "macro" => "OPENSSL_NO_FUZZ_AFL"
     },
     "fuzz-libfuzzer" => {
         "macro" => "OPENSSL_NO_FUZZ_LIBFUZZER"
+    },
+    "h3demo" => {
+        "macro" => "OPENSSL_NO_H3DEMO"
+    },
+    "hqinterop" => {
+        "macro" => "OPENSSL_NO_HQINTEROP"
+    },
+    "jitter" => {
+        "macro" => "OPENSSL_NO_JITTER"
     },
     "ktls" => {
         "macro" => "OPENSSL_NO_KTLS"
@@ -27662,6 +30034,9 @@ my %disabled_info = (
     "msan" => {
         "macro" => "OPENSSL_NO_MSAN"
     },
+    "pie" => {
+        "macro" => "OPENSSL_NO_PIE"
+    },
     "rc5" => {
         "macro" => "OPENSSL_NO_RC5",
         "skipped" => [
@@ -27677,6 +30052,12 @@ my %disabled_info = (
     "ssl3-method" => {
         "macro" => "OPENSSL_NO_SSL3_METHOD"
     },
+    "sslkeylog" => {
+        "macro" => "OPENSSL_NO_SSLKEYLOG"
+    },
+    "tfo" => {
+        "macro" => "OPENSSL_NO_TFO"
+    },
     "trace" => {
         "macro" => "OPENSSL_NO_TRACE"
     },
@@ -27691,6 +30072,21 @@ my %disabled_info = (
     },
     "weak-ssl-ciphers" => {
         "macro" => "OPENSSL_NO_WEAK_SSL_CIPHERS"
+    },
+    "winstore" => {
+        "macro" => "OPENSSL_NO_WINSTORE"
+    },
+    "zlib" => {
+        "macro" => "OPENSSL_NO_ZLIB"
+    },
+    "zlib-dynamic" => {
+        "macro" => "OPENSSL_NO_ZLIB_DYNAMIC"
+    },
+    "zstd" => {
+        "macro" => "OPENSSL_NO_ZSTD"
+    },
+    "zstd-dynamic" => {
+        "macro" => "OPENSSL_NO_ZSTD_DYNAMIC"
     }
 );
 my @user_crossable = qw( AR AS CC CXX CPP LD MT RANLIB RC );
@@ -27704,15 +30100,15 @@ unless (caller) {
     use File::Copy;
     use Pod::Usage;
 
-    use lib '/home/runner/work/node/node/deps/openssl/openssl/util/perl';
-    use OpenSSL::fallback '/home/runner/work/node/node/deps/openssl/openssl/external/perl/MODULES.txt';
+    use lib '/node/deps/openssl/openssl/util/perl';
+    use OpenSSL::fallback '/node/deps/openssl/openssl/external/perl/MODULES.txt';
 
     my $here = dirname($0);
 
     if (scalar @ARGV == 0) {
         # With no arguments, re-create the build file
         # We do that in two steps, where the first step emits perl
-        # snipets.
+        # snippets.
 
         my $buildfile = $config{build_file};
         my $buildfile_template = "$buildfile.in";
@@ -27732,7 +30128,7 @@ unless (caller) {
             );
 
         use lib '.';
-        use lib '/home/runner/work/node/node/deps/openssl/openssl/Configurations';
+        use lib '/node/deps/openssl/openssl/Configurations';
         use gentemplate;
 
         open my $buildfile_template_fh, ">$buildfile_template"
@@ -27749,8 +30145,8 @@ unless (caller) {
 
         my $prepend = <<'_____';
 use File::Spec::Functions;
-use lib '/home/runner/work/node/node/deps/openssl/openssl/util/perl';
-use lib '/home/runner/work/node/node/deps/openssl/openssl/Configurations';
+use lib '/node/deps/openssl/openssl/util/perl';
+use lib '/node/deps/openssl/openssl/Configurations';
 use lib '.';
 use platform;
 _____
