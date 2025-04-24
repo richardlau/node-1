@@ -507,7 +507,10 @@
           '-fno-strict-aliasing',
           '-std=gnu++20',
         ],
-        'defines': [ '__STDC_FORMAT_MACROS' ],
+        'defines': [
+          '__STDC_FORMAT_MACROS',
+          '_FILE_OFFSET_BITS=64'
+        ],
         'ldflags': [ '-rdynamic' ],
         'target_conditions': [
           # The 1990s toolchain on SmartOS can't handle thin archives.
