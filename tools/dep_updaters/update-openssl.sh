@@ -69,6 +69,7 @@ regenerate() {
 
   echo "Regenerating platform-dependent files..."
 
+  # shellcheck disable=SC2312
   DOCKER_COMMAND="docker run --rm -u $(id -u) -v $(pwd):/node"
   export DOCKER_COMMAND
   make -C "$DEPS_DIR/openssl/config" clean
