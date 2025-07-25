@@ -69,15 +69,12 @@ regenerate() {
 
   echo "Regenerating platform-dependent files..."
 
-  # shellcheck disable=SC2312
-  DOCKER_COMMAND="docker run --rm -u $(id -u) -v $(pwd):/node"
-  export DOCKER_COMMAND
   make -C "$DEPS_DIR/openssl/config" clean
   # Needed for compatibility with nasm on 32-bit Windows
   # See https://github.com/nodejs/node/blob/main/doc/contributing/maintaining/maintaining-openssl.md#2-execute-make-in-depsopensslconfig-directory
   sed -i 's/#ifdef/%ifdef/g' "$DEPS_DIR/openssl/openssl/crypto/perlasm/x86asm.pl"
   sed -i 's/#endif/%endif/g' "$DEPS_DIR/openssl/openssl/crypto/perlasm/x86asm.pl"
-  make gen-openssl
+  make -C "$BASE_DIR" gen-openssl
 
   echo "All done!"
   echo ""
