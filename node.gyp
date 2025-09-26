@@ -1347,6 +1347,11 @@
     {
       'target_name': 'nop',
       'type': 'executable',
+      'conditions': [
+        ['OS!="win"', {
+          'ldflags': [ '-Wl,--as-needed' ],
+        }],
+      ],
       'sources': [
         'test/nop/nop.c',
       ]
