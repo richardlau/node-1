@@ -1084,9 +1084,9 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
 
   TNode<RawPtrT> LoadFunctionTemplateInfoJsCallbackPtr(
       TNode<FunctionTemplateInfo> object) {
-    return LoadExternalPointerFromObject(
-        object, FunctionTemplateInfo::kMaybeRedirectedCallbackOffset,
-        kFunctionTemplateInfoCallbackTag);
+    return LoadExternalPointerFromObject(object,
+                                         FunctionTemplateInfo::kCallbackOffset,
+                                         kFunctionTemplateInfoCallbackTag);
   }
 
   TNode<RawPtrT> LoadExternalStringResourcePtr(TNode<ExternalString> object) {
@@ -3173,6 +3173,10 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   TNode<JSReceiver> ToObject_Inline(TNode<Context> context,
                                     TNode<Object> input);
 
+  // ES6 section 9.2.1.2, OrdinaryCallBindThis for sloppy callee.
+  TNode<JSReceiver> ConvertReceiver(TNode<Context> context,
+                                    TNode<Object> input);
+
   // ES6 7.1.15 ToLength, but with inlined fast path.
   TNode<Number> ToLength_Inline(TNode<Context> context, TNode<Object> input);
 
@@ -3841,6 +3845,10 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
                            TNode<HeapObject> maybe_feedback_vector,
                            TNode<UintPtrT> slot_id);
 
+  void UpdateEmbeddedFeedback(TNode<Int32T> feedback,
+                              TNode<BytecodeArray> bytecode_array,
+                              TNode<IntPtrT> feedback_offset);
+
   // Report that there was a feedback update, performing any tasks that should
   // be done after a feedback update.
   void ReportFeedbackUpdate(TNode<FeedbackVector> feedback_vector,
@@ -4269,7 +4277,6 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
   // Load a builtin's code from the builtin array in the isolate.
   TNode<Code> LoadBuiltin(TNode<Smi> builtin_id);
 
-#ifdef V8_ENABLE_LEAPTIERING
   // Load a builtin's handle into the JSDispatchTable.
 #if V8_STATIC_DISPATCH_HANDLES_BOOL
   TNode<JSDispatchHandleT> LoadBuiltinDispatchHandle(
@@ -4286,7 +4293,6 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
 
   TNode<UintPtrT> ComputeJSDispatchTableEntryOffset(
       TNode<JSDispatchHandleT> handle);
-#endif  // V8_ENABLE_LEAPTIERING
 
   // Tailcalls to the given code object with JSCall linkage. The JS arguments
   // (including receiver) are supposed to be already on the stack.
@@ -4302,8 +4308,7 @@ class V8_EXPORT_PRIVATE CodeStubAssembler
                       TNode<Int32T> arg_count,
                       TNode<JSDispatchHandleT> dispatch_handle);
   // Same as above, but the code object is loaded from the dispatch table
-  // entry or from the function according to V8_ENABLE_LEAPTIERING state and
-  // thus the parameter count check is not necessary.
+  // entry and thus the parameter count check is not necessary.
   void TailCallJSCode(TNode<Context> context, TNode<JSFunction> function,
                       TNode<Object> new_target, TNode<Int32T> arg_count,
                       TNode<JSDispatchHandleT> dispatch_handle);

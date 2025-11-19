@@ -50,6 +50,11 @@ InterpreterAssembler::InterpreterAssembler(CodeAssemblerState* state,
 #ifdef V8_TRACE_UNOPTIMIZED
   TraceBytecode(Runtime::kTraceUnoptimizedBytecodeEntry);
 #endif
+
+#ifdef V8_DUMPLING
+  TraceBytecode(Runtime::kDumpExecutionFrame);
+#endif
+
   RegisterCallGenerationCallbacks([this] { CallPrologue(); },
                                   [this] { CallEpilogue(); });
 
@@ -137,6 +142,17 @@ TNode<BytecodeArray> InterpreterAssembler::BytecodeArrayTaggedPointer() {
     bytecode_array_valid_ = true;
   }
   return bytecode_array_.value();
+}
+
+void InterpreterAssembler::UpdateEmbeddedFeedback(TNode<Smi> feedback,
+                                                  int feedback_operand_index) {
+#ifndef V8_JITLESS
+  TNode<IntPtrT> feedback_value_offset =
+      BytecodeOperandOffset(feedback_operand_index);
+  CodeStubAssembler::UpdateEmbeddedFeedback(SmiToInt32(feedback),
+                                            BytecodeArrayTaggedPointer(),
+                                            feedback_value_offset);
+#endif  // V8_JITLESS
 }
 
 TNode<ExternalReference> InterpreterAssembler::DispatchTablePointer() {
@@ -674,6 +690,10 @@ TNode<Uint32T> InterpreterAssembler::BytecodeOperandIntrinsicId(
       Bytecodes::GetOperandSize(bytecode_, operand_index, operand_scale());
   DCHECK_EQ(operand_size, OperandSize::kByte);
   return BytecodeUnsignedOperand(operand_index, operand_size);
+}
+
+TNode<IntPtrT> InterpreterAssembler::BytecodeOperandOffset(int operand_index) {
+  return IntPtrAdd(BytecodeOffset(), OperandOffset(operand_index));
 }
 
 TNode<Object> InterpreterAssembler::LoadConstantPoolEntry(TNode<WordT> index) {
@@ -1270,6 +1290,10 @@ void InterpreterAssembler::InlineShortStar(TNode<WordT> target_bytecode) {
 
 #ifdef V8_TRACE_UNOPTIMIZED
   TraceBytecode(Runtime::kTraceUnoptimizedBytecodeEntry);
+#endif
+
+#ifdef V8_DUMPLING
+  TraceBytecode(Runtime::kDumpExecutionFrame);
 #endif
 
   StoreRegisterForShortStar(GetAccumulator(), target_bytecode);

@@ -72,6 +72,7 @@ class MaglevGraphOptimizer {
   compiler::JSHeapBroker* broker() const;
 
   std::optional<Range> GetRange(ValueNode* node);
+  bool IsRangeLessEqual(ValueNode* lhs, ValueNode* rhs);
 
   // Iterates the deopt frames unwrapping its inputs, ie, removing Identity or
   // ReturnedValue nodes.
@@ -116,6 +117,8 @@ class MaglevGraphOptimizer {
 
   template <typename NodeT>
   ProcessResult ProcessLoadContextSlot(NodeT* node);
+  template <typename NodeT>
+  ProcessResult ProcessCheckMaps(NodeT* node, ValueNode* object_map = nullptr);
 };
 
 }  // namespace maglev

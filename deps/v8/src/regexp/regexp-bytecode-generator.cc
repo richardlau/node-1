@@ -16,8 +16,9 @@
 namespace v8 {
 namespace internal {
 
-RegExpBytecodeGenerator::RegExpBytecodeGenerator(Isolate* isolate, Zone* zone)
-    : RegExpMacroAssembler(isolate, zone),
+RegExpBytecodeGenerator::RegExpBytecodeGenerator(Isolate* isolate, Zone* zone,
+                                                 Mode mode)
+    : RegExpMacroAssembler(isolate, zone, mode),
       buffer_(kInitialBufferSize, zone),
       pc_(0),
       advance_current_end_(kInvalidPC),
@@ -188,7 +189,8 @@ void RegExpBytecodeGenerator::CheckFixedLengthLoop(
 
 void RegExpBytecodeGenerator::CheckPosition(int cp_offset,
                                             Label* on_outside_input) {
-  LoadCurrentCharacter(cp_offset, on_outside_input, true);
+  Emit(BC_CHECK_CURRENT_POSITION, cp_offset);
+  EmitOrLink(on_outside_input);
 }
 
 void RegExpBytecodeGenerator::LoadCurrentCharacterImpl(int cp_offset,

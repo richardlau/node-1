@@ -139,7 +139,7 @@ DirectHandle<String> WasmModuleObject::ExtractUtf8StringFromModuleBytes(
   base::Vector<const uint8_t> name_vec =
       wire_bytes.SubVector(ref.offset(), ref.end_offset());
   // UTF8 validation happens at decode time.
-  DCHECK(unibrow::Utf8::ValidateEncoding(name_vec.begin(), name_vec.length()));
+  DCHECK(unibrow::Utf8::ValidateEncoding(name_vec.begin(), name_vec.size()));
   auto* factory = isolate->factory();
   return internalize
              ? factory->InternalizeUtf8String(
@@ -1869,8 +1869,9 @@ void WasmTrustedInstanceData::InitDataSegmentArrays(
     // Set the active segments to being already dropped, since memory.init on
     // a dropped passive segment and an active segment have the same
     // behavior.
-    data_segment_sizes()->set(static_cast<int>(i),
-                              segment.active ? 0 : source_bytes.length());
+    data_segment_sizes()->set(
+        static_cast<int>(i),
+        segment.active ? 0 : static_cast<uint32_t>(source_bytes.size()));
   }
 }
 
@@ -2497,7 +2498,8 @@ void SetForNonWrapper(Tagged<DispatchTable> dispatch_table, int index,
   } else {
 #if V8_ENABLE_DRUMBRAKE
     // Ignore call_target, not used in jitless mode.
-    WriteField<int>(offset + kFunctionIndexBias, function_index);
+    dispatch_table->template WriteField<int>(
+        offset + DispatchTable::kFunctionIndexBias, function_index);
 #endif  // V8_ENABLE_DRUMBRAKE
   }
   dispatch_table->WriteProtectedPointerField(
@@ -2578,7 +2580,8 @@ void SetForWrapper(
   } else {
 #if V8_ENABLE_DRUMBRAKE
     // Ignore call_target, not used in jitless mode.
-    WriteField<int>(offset + kFunctionIndexBias, function_index);
+    dispatch_table->template WriteField<int>(
+        offset + DispatchTable::kFunctionIndexBias, function_index);
 #endif  // V8_ENABLE_DRUMBRAKE
   }
   if constexpr (requires { DispatchTable::kSigBias; }) {

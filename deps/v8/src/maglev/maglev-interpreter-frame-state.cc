@@ -166,7 +166,7 @@ void PrintBeforeMerge(MaglevGraphBuilder* builder, ValueNode* current_value,
   if (V8_LIKELY(!builder->is_tracing_enabled())) return;
   std::cout << "  " << reg.ToString() << ": " << PrintNodeLabel(current_value)
             << "<";
-  if (kna) {
+  if (kna && current_value) {
     if (auto cur_info = kna->TryGetInfoFor(current_value)) {
       std::cout << cur_info->type();
       if (cur_info->possible_maps_are_known()) {
@@ -175,7 +175,7 @@ void PrintBeforeMerge(MaglevGraphBuilder* builder, ValueNode* current_value,
     }
   }
   std::cout << "> <- " << PrintNodeLabel(unmerged_value) << "<";
-  if (kna) {
+  if (kna && current_value) {
     if (auto in_info = kna->TryGetInfoFor(unmerged_value)) {
       std::cout << in_info->type();
       if (in_info->possible_maps_are_known()) {
@@ -588,7 +588,7 @@ ValueNode* FromInt32ToTagged(const MaglevGraphBuilder* builder,
                              NodeType node_type, ValueNode* value,
                              BasicBlock* predecessor) {
   DCHECK(value->is_int32());
-  DCHECK(!value->properties().is_conversion());
+  DCHECK(!value->is_conversion());
 
   ValueNode* tagged;
   if (value->Is<Int32Constant>()) {
@@ -619,7 +619,7 @@ ValueNode* FromUint32ToTagged(const MaglevGraphBuilder* builder,
                               NodeType node_type, ValueNode* value,
                               BasicBlock* predecessor) {
   DCHECK(value->is_uint32());
-  DCHECK(!value->properties().is_conversion());
+  DCHECK(!value->is_conversion());
 
   ValueNode* tagged;
   if (NodeTypeIsSmi(node_type)) {
@@ -638,7 +638,7 @@ ValueNode* FromIntPtrToTagged(const MaglevGraphBuilder* builder,
                               BasicBlock* predecessor) {
   DCHECK_EQ(value->properties().value_representation(),
             ValueRepresentation::kIntPtr);
-  DCHECK(!value->properties().is_conversion());
+  DCHECK(!value->is_conversion());
 
   ValueNode* tagged = Node::New<IntPtrToNumber>(builder->zone(), {value});
 
@@ -651,7 +651,7 @@ ValueNode* FromFloat64ToTagged(const MaglevGraphBuilder* builder,
                                NodeType node_type, ValueNode* value,
                                BasicBlock* predecessor) {
   DCHECK(value->is_float64());
-  DCHECK(!value->properties().is_conversion());
+  DCHECK(!value->is_conversion());
 
   // Create a tagged version, and insert it at the end of the predecessor.
   ValueNode* tagged = Node::New<Float64ToTagged>(
@@ -663,11 +663,25 @@ ValueNode* FromFloat64ToTagged(const MaglevGraphBuilder* builder,
   return tagged;
 }
 
+ValueNode* FromShiftedInt53ToTagged(const MaglevGraphBuilder* builder,
+                                    NodeType node_type, ValueNode* value,
+                                    BasicBlock* predecessor) {
+  DCHECK(value->is_shifted_int53());
+  DCHECK(!value->properties().is_conversion());
+
+  // Create a tagged version, and insert it at the end of the predecessor.
+  ValueNode* tagged = Node::New<ShiftedInt53ToNumber>(builder->zone(), {value});
+
+  predecessor->nodes().push_back(tagged);
+  builder->compilation_unit()->RegisterNodeInGraphLabeller(tagged);
+  return tagged;
+}
+
 ValueNode* FromHoleyFloat64ToTagged(const MaglevGraphBuilder* builder,
                                     NodeType node_type, ValueNode* value,
                                     BasicBlock* predecessor) {
   DCHECK(value->is_holey_float64());
-  DCHECK(!value->properties().is_conversion());
+  DCHECK(!value->is_conversion());
 
   // Create a tagged version, and insert it at the end of the predecessor.
   ValueNode* tagged = Node::New<HoleyFloat64ToTagged>(
@@ -693,9 +707,12 @@ ValueNode* NonTaggedToTagged(const MaglevGraphBuilder* builder,
       return FromIntPtrToTagged(builder, node_type, value, predecessor);
     case ValueRepresentation::kFloat64:
       return FromFloat64ToTagged(builder, node_type, value, predecessor);
+    case ValueRepresentation::kShiftedInt53:
+      return FromShiftedInt53ToTagged(builder, node_type, value, predecessor);
     case ValueRepresentation::kHoleyFloat64:
       return FromHoleyFloat64ToTagged(builder, node_type, value, predecessor);
     case ValueRepresentation::kNone:
+    case ValueRepresentation::kRawPtr:
       UNREACHABLE();
   }
 }
@@ -706,9 +723,7 @@ ValueNode* EnsureTagged(const MaglevGraphBuilder* builder,
     return value;
   }
 
-  auto info_it = known_node_aspects.FindInfo(value);
-  const NodeInfo* info =
-      known_node_aspects.IsValid(info_it) ? &info_it->second : nullptr;
+  const NodeInfo* info = known_node_aspects.TryGetInfoFor(value);
   if (info) {
     if (auto alt = info->alternative().tagged()) {
       return alt;

@@ -457,7 +457,8 @@ declare_args() {
   v8_enable_experimental_tsa_builtins = false
 
   # Use the encoding of undefined in double values.
-  v8_enable_undefined_double = false
+  # Only enabled for fuzzing in V8 Fuzzilli builds
+  v8_enable_undefined_double = v8_fuzzilli
 
   v8_dcheck_always_on = dcheck_always_on
 
@@ -489,6 +490,9 @@ declare_args() {
 
   # Use a hard-coded secret value when hashing.
   v8_use_default_hasher_secret = true
+
+  # add instrumentation for Dumpling differential fuzzing
+  v8_dumpling = false
 }
 
 # Derived defaults.
@@ -598,7 +602,7 @@ if (v8_enable_external_code_space == "") {
       v8_enable_pointer_compression &&
       v8_enable_pointer_compression_shared_cage &&
       (v8_current_cpu == "x64" || v8_current_cpu == "arm64" ||
-       v8_current_cpu == "loong64")
+       v8_current_cpu == "loong64" || v8_current_cpu == "riscv64")
 }
 if (v8_enable_sparkplug == "") {
   v8_enable_sparkplug = !v8_jitless
@@ -978,6 +982,8 @@ external_v8_defines = [
   "V8_DEPRECATION_WARNINGS",
   "V8_IMMINENT_DEPRECATION_WARNINGS",
   "V8_USE_PERFETTO",
+  "V8_USE_PERFETTO_JSON_EXPORT",
+  "V8_USE_PERFETTO_SDK",
   "V8_MAP_PACKING",
   "V8_IS_TSAN",
   "V8_ENABLE_DIRECT_HANDLE",
@@ -1025,6 +1031,12 @@ if (v8_imminent_deprecation_warnings) {
 }
 if (v8_use_perfetto) {
   enabled_external_v8_defines += [ "V8_USE_PERFETTO" ]
+}
+if (v8_use_perfetto_json_export) {
+  enabled_external_v8_defines += [ "V8_USE_PERFETTO_JSON_EXPORT" ]
+}
+if (v8_use_perfetto_sdk) {
+  enabled_external_v8_defines += [ "V8_USE_PERFETTO_SDK" ]
 }
 if (v8_enable_map_packing) {
   enabled_external_v8_defines += [ "V8_MAP_PACKING" ]
@@ -1326,6 +1338,9 @@ config("features") {
   if (v8_fuzzilli) {
     defines += [ "V8_FUZZILLI" ]
   }
+  if (v8_dumpling) {
+    defines += [ "V8_DUMPLING" ]
+  }
   if (v8_enable_fuzztest) {
     defines += [ "V8_ENABLE_FUZZTEST" ]
   }
@@ -1459,7 +1474,6 @@ config("features") {
   if (v8_enable_undefined_double) {
     defines += [ "V8_ENABLE_UNDEFINED_DOUBLE" ]
   }
-  defines += [ "V8_ENABLE_LEAPTIERING" ]
   if (v8_enable_partition_alloc) {
     defines += [ "V8_ENABLE_PARTITION_ALLOC" ]
   }
@@ -1589,10 +1603,9 @@ config("toolchain") {
     }
   }
 
-  # Under simulator build, compiler will not provide __riscv_xlen. Define here
   if (v8_current_cpu == "riscv64" || v8_current_cpu == "riscv32") {
     if (v8_target_is_simulator) {
-      defines += [ "_RISCV_TARGET_SIMULATOR" ]
+      defines += [ "RISCV_TARGET_SIMULATOR" ]
     }
     if (riscv_use_rvv || v8_target_is_simulator) {
       defines += [ "CAN_USE_RVV_INSTRUCTIONS" ]
@@ -1607,10 +1620,19 @@ config("toolchain") {
     if (riscv_use_zbs) {
       defines += [ "__riscv_zbs" ]
     }
+    defines += [ "RISCV_CODE_ALIGNMENT=${riscv_code_alignment}" ]
+    defines +=
+        [ "RISCV_CONSTANT_POOL_ALIGNMENT=${riscv_constant_pool_alignment}" ]
   }
+
   if (v8_current_cpu == "riscv64") {
     defines += [ "V8_TARGET_ARCH_RISCV64" ]
-    defines += [ "__riscv_xlen=64" ]
+
+    # When building the simulator, the compiler does not provide __riscv_xlen,
+    # so we explicitly define it here.
+    if (v8_target_is_simulator) {
+      defines += [ "__riscv_xlen=64" ]
+    }
     if (!is_clang) {
       cflags += [ "-ffp-contract=off" ]
     }
@@ -1621,7 +1643,12 @@ config("toolchain") {
 
   if (v8_current_cpu == "riscv32") {
     defines += [ "V8_TARGET_ARCH_RISCV32" ]
-    defines += [ "__riscv_xlen=32" ]
+
+    # When building the simulator, the compiler does not provide __riscv_xlen,
+    # so we explicitly define it here.
+    if (v8_target_is_simulator) {
+      defines += [ "__riscv_xlen=32" ]
+    }
   }
 
   if (v8_current_cpu == "x86") {
@@ -3555,7 +3582,7 @@ v8_header_set("v8_internal_headers") {
     "src/compiler/backend/register-allocator.h",
     "src/compiler/backend/spill-placer.h",
     "src/compiler/backend/unwinding-info-writer.h",
-    "src/compiler/basic-block-instrumentor.h",
+    "src/compiler/basic-block-call-graph-profiler.h",
     "src/compiler/branch-elimination.h",
     "src/compiler/bytecode-analysis.h",
     "src/compiler/bytecode-graph-builder.h",
@@ -4476,6 +4503,7 @@ v8_header_set("v8_internal_headers") {
       "src/tracing/code-data-source.h",
       "src/tracing/code-trace-context.h",
       "src/tracing/perfetto-logger.h",
+      "src/tracing/perfetto-sdk.h",
       "src/tracing/perfetto-utils.h",
     ]
   }
@@ -5138,7 +5166,7 @@ v8_compiler_sources = [
   "src/compiler/backend/register-allocator-verifier.cc",
   "src/compiler/backend/register-allocator.cc",
   "src/compiler/backend/spill-placer.cc",
-  "src/compiler/basic-block-instrumentor.cc",
+  "src/compiler/basic-block-call-graph-profiler.cc",
   "src/compiler/branch-elimination.cc",
   "src/compiler/bytecode-analysis.cc",
   "src/compiler/bytecode-graph-builder.cc",
@@ -6493,6 +6521,15 @@ v8_source_set("v8_base_without_compiler") {
     ]
   }
 
+  if (v8_dumpling) {
+    sources += [
+      "src/dumpling/dumpling-manager.cc",
+      "src/dumpling/dumpling-manager.h",
+      "src/dumpling/object-dumping.cc",
+      "src/dumpling/object-dumping.h",
+    ]
+  }
+
   if (v8_enable_i18n_support) {
     deps += [ ":run_gen-regexp-special-case" ]
     sources += [ "$target_gen_dir/src/regexp/special-case.cc" ]
@@ -7431,6 +7468,7 @@ v8_source_set("cppgc_base") {
 
   if (v8_use_perfetto) {
     sources += [
+      "src/tracing/perfetto-sdk.h",
       "src/tracing/trace-categories.cc",
       "src/tracing/trace-categories.h",
     ]

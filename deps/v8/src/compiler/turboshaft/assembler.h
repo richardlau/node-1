@@ -61,6 +61,7 @@
 #include "src/objects/swiss-name-dictionary.h"
 #include "src/objects/tagged.h"
 #include "src/objects/turbofan-types.h"
+#include "src/utils/utils.h"
 
 #ifdef V8_ENABLE_WEBASSEMBLY
 #include "src/wasm/wasm-objects.h"
@@ -1660,15 +1661,21 @@ class TurboshaftAssemblerOpInterface
   // Methods to be used by the reducers to reducer operations with the whole
   // reducer stack.
 
-  V<Word32> Word32SignHint(V<Word32> input, Word32SignHintOp::Sign sign) {
-    return ReduceIfReachableWord32SignHint(input, sign);
+  V<Float64OrWord32> TypeHint(V<Float64OrWord32> input, TypeHintOp::Type type) {
+    return ReduceIfReachableTypeHint(input, type);
   }
 
-  V<Word32> Word32SignHintUnsigned(V<Word32> input) {
-    return Word32SignHint(input, Word32SignHintOp::Sign::kUnsigned);
+  V<Word32> TypeHintUint32(V<Word32> input) {
+    return V<Word32>::Cast(TypeHint(input, TypeHintOp::Type::kUint32));
   }
-  V<Word32> Word32SignHintSigned(V<Word32> input) {
-    return Word32SignHint(input, Word32SignHintOp::Sign::kSigned);
+  V<Word32> TypeHintInt32(V<Word32> input) {
+    return V<Word32>::Cast(TypeHint(input, TypeHintOp::Type::kInt32));
+  }
+  V<Float64> TypeHintFloat64(V<Float64> input) {
+    return V<Float64>::Cast(TypeHint(input, TypeHintOp::Type::kFloat64));
+  }
+  V<Float64> TypeHintHoleyFloat64(V<Float64> input) {
+    return V<Float64>::Cast(TypeHint(input, TypeHintOp::Type::kHoleyFloat64));
   }
 
   V<Object> GenericBinop(V<Object> left, V<Object> right,
@@ -1935,6 +1942,11 @@ class TurboshaftAssemblerOpInterface
 
   V<Word32> TaggedEqual(V<Object> left, V<Object> right) {
     return Equal(left, right, RegisterRepresentation::Tagged());
+  }
+
+  V<Word32> SmiEqual(ConstOrV<Smi> a, ConstOrV<Smi> b) {
+    return __ WordPtrEqual(__ BitcastSmiToWordPtr(resolve(a)),
+                           __ BitcastSmiToWordPtr(resolve(b)));
   }
 
   V<Word32> RootEqual(V<Object> input, RootIndex root, Isolate* isolate) {
@@ -2319,6 +2331,7 @@ class TurboshaftAssemblerOpInterface
   CONVERT_PRIMITIVE_TO_OBJECT(ConvertInt32ToNumber, Number, Word32, Signed)
   CONVERT_PRIMITIVE_TO_OBJECT(ConvertUint32ToNumber, Number, Word32, Unsigned)
   CONVERT_PRIMITIVE_TO_OBJECT(ConvertIntPtrToNumber, Number, WordPtr, Signed)
+  CONVERT_PRIMITIVE_TO_OBJECT(ConvertInt64ToNumber, Number, Word64, Signed)
   CONVERT_PRIMITIVE_TO_OBJECT(ConvertWord32ToBoolean, Boolean, Word32, Signed)
   CONVERT_PRIMITIVE_TO_OBJECT(ConvertCharCodeToString, String, Word32, CharCode)
 #undef CONVERT_PRIMITIVE_TO_OBJECT
@@ -2340,16 +2353,32 @@ class TurboshaftAssemblerOpInterface
         CheckForMinusZeroMode::kCheckForMinusZero));
   }
 
-  V<JSPrimitive> ConvertUntaggedToJSPrimitiveOrDeopt(
-      V<Untagged> input, V<turboshaft::FrameState> frame_state,
-      ConvertUntaggedToJSPrimitiveOrDeoptOp::JSPrimitiveKind kind,
+  V<Smi> ConvertWordToSmiOrDeopt(
+      V<Word> input, V<turboshaft::FrameState> frame_state,
       RegisterRepresentation input_rep,
-      ConvertUntaggedToJSPrimitiveOrDeoptOp::InputInterpretation
-          input_interpretation,
+      ConvertWordToSmiOrDeoptOp::InputInterpretation input_interpretation,
       const FeedbackSource& feedback) {
-    return ReduceIfReachableConvertUntaggedToJSPrimitiveOrDeopt(
-        input, frame_state, kind, input_rep, input_interpretation, feedback);
+    return ReduceIfReachableConvertWordToSmiOrDeopt(
+        input, frame_state, input_rep, input_interpretation, feedback);
   }
+
+#define DEF_CONVERT_WORD_TO_SMI_OR_DEOPT(From, repr, sign)                  \
+  V<Smi> Convert##From##ToSmiOrDeopt(V<repr> input,                         \
+                                     V<turboshaft::FrameState> frame_state, \
+                                     const FeedbackSource& feedback) {      \
+    return ConvertWordToSmiOrDeopt(                                         \
+        input, frame_state, RegisterRepresentation::repr(),                 \
+        ConvertWordToSmiOrDeoptOp::InputInterpretation::k##sign, feedback); \
+  }
+
+  DEF_CONVERT_WORD_TO_SMI_OR_DEOPT(Int32, Word32, Signed)
+  DEF_CONVERT_WORD_TO_SMI_OR_DEOPT(Uint32, Word32, Unsigned)
+  DEF_CONVERT_WORD_TO_SMI_OR_DEOPT(Int64, Word64, Signed)
+  DEF_CONVERT_WORD_TO_SMI_OR_DEOPT(Uint64, Word64, Unsigned)
+  DEF_CONVERT_WORD_TO_SMI_OR_DEOPT(IntPtr, WordPtr, Signed)
+  DEF_CONVERT_WORD_TO_SMI_OR_DEOPT(UintPtr, WordPtr, Unsigned)
+
+#undef DEF_CONVERT_WORD_TO_SMI_OR_DEOPT
 
   V<Untagged> ConvertJSPrimitiveToUntagged(
       V<JSPrimitive> primitive,
@@ -2711,6 +2740,16 @@ class TurboshaftAssemblerOpInterface
     }
   }
 
+  V<Word64> ChangeShiftedInt53ToInt64(V<Word64> input) {
+    DCHECK(Is64());
+    return Word64ShiftRightArithmetic(input, 11);
+  }
+
+  V<Word64> TruncateInt64ToShiftedInt53(V<Word64> input) {
+    DCHECK(Is64());
+    return Word64ShiftLeft(input, 11);
+  }
+
   V<Word32> IsSmi(V<Object> object) {
     if constexpr (COMPRESS_POINTERS_BOOL) {
       return Word32Equal(Word32BitwiseAnd(V<Word32>::Cast(object), kSmiTagMask),
@@ -2915,6 +2954,12 @@ class TurboshaftAssemblerOpInterface
   OpIndex MemoryBarrier(AtomicMemoryOrder memory_order) {
     return ReduceIfReachableMemoryBarrier(memory_order);
   }
+
+#ifdef V8_ENABLE_SANDBOX_HARDWARE_SUPPORT
+  OpIndex SwitchSandboxMode(CodeSandboxingMode sandbox_mode) {
+    return ReduceIfReachableSwitchSandboxMode(sandbox_mode);
+  }
+#endif  // V8_ENABLE_SANDBOX_HARDWARE_SUPPORT
 
   OpIndex Pause() { return ReduceIfReachablePause(); }
 
@@ -3896,7 +3941,6 @@ class TurboshaftAssemblerOpInterface
     if (V8_UNLIKELY(Asm().generating_unreachable_operations())) {
       return returns_t::Invalid();
     }
-    const size_t argc = runtime::GetArgumentCount<typename Desc::Arguments>();
     const int result_size =
         Runtime::FunctionForId(Desc::kFunction)->result_size;
     DCHECK(context.valid());
@@ -3905,17 +3949,20 @@ class TurboshaftAssemblerOpInterface
     DCHECK_IMPLIES(!compiling_builtins,
                    frame_state.valid() == Desc::kCanTriggerLazyDeopt);
     auto arguments = runtime::ArgumentsToVector(args);
-    DCHECK_EQ(argc, arguments.size());
+    const size_t actual_argument_count = arguments.size();
+    DCHECK_GE(runtime::GetArgumentCount<typename Desc::Arguments>(),
+              actual_argument_count);  // We may have some optional arguments.
     arguments.push_back(
         ExternalConstant(ExternalReference::Create(Desc::kFunction)));
-    arguments.push_back(Word32Constant(static_cast<int>(argc)));
+    arguments.push_back(
+        Word32Constant(static_cast<int>(actual_argument_count)));
     arguments.push_back(context);
     Isolate* isolate = Asm().data()->isolate();
     DCHECK_NOT_NULL(isolate);
 
     const TSCallDescriptor* desc =
-        Desc::Create(Asm().output_graph().graph_zone(), lazy_deopt_on_throw,
-                     !compiling_builtins);
+        Desc::Create(actual_argument_count, Asm().output_graph().graph_zone(),
+                     lazy_deopt_on_throw, !compiling_builtins);
     return returns_t::Cast(Call(CEntryStubConstant(isolate, result_size),
                                 frame_state, base::VectorOf(arguments), desc));
   }
@@ -4736,6 +4783,14 @@ class TurboshaftAssemblerOpInterface
                                                 is_little_endian, element_type);
   }
 
+  OpIndex LoadDataViewElementFromDataPointer(V<WordPtr> storage,
+                                             V<WordPtr> index,
+                                             V<Word32> is_little_endian,
+                                             ExternalArrayType element_type) {
+    return ReduceIfReachableLoadDataViewElementFromDataPointer(
+        storage, index, is_little_endian, element_type);
+  }
+
   V<Object> LoadStackArgument(V<Object> base, V<WordPtr> index) {
     return ReduceIfReachableLoadStackArgument(base, index);
   }
@@ -4753,6 +4808,14 @@ class TurboshaftAssemblerOpInterface
                             ExternalArrayType element_type) {
     ReduceIfReachableStoreDataViewElement(
         object, storage, index, value, resolve(is_little_endian), element_type);
+  }
+
+  void StoreDataViewElementToDataPointer(V<WordPtr> storage, V<WordPtr> index,
+                                         OpIndex value,
+                                         ConstOrV<Word32> is_little_endian,
+                                         ExternalArrayType element_type) {
+    ReduceIfReachableStoreDataViewElementToDataPointer(
+        storage, index, value, resolve(is_little_endian), element_type);
   }
 
   void TransitionAndStoreArrayElement(
@@ -5308,6 +5371,9 @@ class TurboshaftAssemblerOpInterface
   V<Float64> resolve(const ConstOrV<Float64>& v) {
     return v.is_constant() ? Float64Constant(v.constant_value()) : v.value();
   }
+  V<Smi> resolve(const ConstOrV<Smi>& v) {
+    return v.is_constant() ? SmiConstant(v.constant_value()) : v.value();
+  }
 
   void CanonicalizeEmbeddedBuiltinsConstantIfNeeded(Handle<HeapObject> object) {
     Isolate* isolate = __ data() -> isolate();
@@ -5587,6 +5653,10 @@ class Assembler : public AssemblerData,
 #ifdef DEBUG
   int& intermediate_tracing_depth() { return intermediate_tracing_depth_; }
 #endif
+
+  IsSmiDecision DecideObjectIsSmi(V<Object> og_index) {
+    return turboshaft::DecideObjectIsSmi(__ output_graph(), og_index);
+  }
 
   // ReduceProjection eliminates projections to tuples and returns the
   // corresponding tuple input instead. We do this at the top of the stack to

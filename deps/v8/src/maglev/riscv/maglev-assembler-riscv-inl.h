@@ -510,11 +510,24 @@ inline MemOperand MaglevAssembler::TypedArrayElementOperand(
   return MemOperand(data_pointer);
 }
 
-inline MemOperand MaglevAssembler::DataViewElementOperand(Register data_pointer,
-                                                          Register index) {
-  Add64(data_pointer, data_pointer,
-        index);  // FIXME: should we check for COMPRESSED PTRS enabled here ?
-  return MemOperand(data_pointer);
+inline void MaglevAssembler::StoreDataViewElement(Register value,
+                                                  Register data_pointer,
+                                                  Register index,
+                                                  int element_size) {
+  MaglevAssembler::TemporaryRegisterScope temps(this);
+  Register addr = temps.AcquireScratch();
+  AddWord(addr, data_pointer, index);
+  StoreField(MemOperand(addr), value, element_size);
+}
+
+inline void MaglevAssembler::LoadDataViewElement(Register result,
+                                                 Register data_pointer,
+                                                 Register index,
+                                                 int element_size) {
+  MaglevAssembler::TemporaryRegisterScope temps(this);
+  Register addr = temps.AcquireScratch();
+  AddWord(addr, data_pointer, index);
+  LoadSignedField(result, MemOperand(addr), element_size);
 }
 
 inline void MaglevAssembler::LoadTaggedFieldByIndex(Register result,
@@ -760,10 +773,6 @@ inline void MaglevAssembler::IncrementAddress(Register reg, int32_t delta) {
 inline void MaglevAssembler::LoadAddress(Register dst, MemOperand location) {
   DCHECK(location.is_reg());
   Add64(dst, location.rm(), location.offset());
-}
-
-inline void MaglevAssembler::Call(Label* target) {
-  MacroAssembler::Call(target);
 }
 
 inline void MaglevAssembler::EmitEnterExitFrame(int extra_slots,

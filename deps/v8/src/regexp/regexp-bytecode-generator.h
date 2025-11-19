@@ -23,10 +23,8 @@ class V8_EXPORT_PRIVATE RegExpBytecodeGenerator : public RegExpMacroAssembler {
   // The assembler allocates and grows its own buffer, and buffer_size
   // determines the initial buffer size. The buffer is owned by the assembler
   // and deallocated upon destruction of the assembler.
-  RegExpBytecodeGenerator(Isolate* isolate, Zone* zone);
+  RegExpBytecodeGenerator(Isolate* isolate, Zone* zone, Mode mode);
   ~RegExpBytecodeGenerator() override;
-  // The byte-code interpreter checks on each push anyway.
-  int stack_limit_slack_slot_count() override { return 1; }
   void Bind(Label* label) override;
   void AdvanceCurrentPosition(int by) override;  // Signed cp change.
   void PopCurrentPosition() override;

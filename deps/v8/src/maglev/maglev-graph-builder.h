@@ -96,12 +96,11 @@ class MaglevGraphBuilder {
     int result_size_;
   };
 
-  explicit MaglevGraphBuilder(LocalIsolate* local_isolate,
-                              MaglevCompilationUnit* compilation_unit,
-                              Graph* graph,
-                              MaglevCallerDetails* caller_details = nullptr);
+  V8_EXPORT_PRIVATE explicit MaglevGraphBuilder(
+      LocalIsolate* local_isolate, MaglevCompilationUnit* compilation_unit,
+      Graph* graph, MaglevCallerDetails* caller_details = nullptr);
 
-  bool Build();
+  V8_EXPORT_PRIVATE bool Build();
 
   ReduceResult BuildInlineFunction(SourcePosition call_site_position,
                                    ValueNode* context, ValueNode* function,
@@ -530,7 +529,17 @@ class MaglevGraphBuilder {
   CallBuiltin* BuildCallBuiltin(std::initializer_list<ValueNode*> inputs);
 
   template <Builtin kBuiltin>
+  ReduceResult BuildCallBuiltinWithTaggedInputs(
+      std::initializer_list<ValueNode*> inputs);
+
+  template <Builtin kBuiltin>
   CallBuiltin* BuildCallBuiltin(
+      std::initializer_list<ValueNode*> inputs,
+      compiler::FeedbackSource const& feedback,
+      CallBuiltin::FeedbackSlotType slot_type = CallBuiltin::kTaggedIndex);
+
+  template <Builtin kBuiltin>
+  ReduceResult BuildCallBuiltinWithTaggedInputs(
       std::initializer_list<ValueNode*> inputs,
       compiler::FeedbackSource const& feedback,
       CallBuiltin::FeedbackSlotType slot_type = CallBuiltin::kTaggedIndex);
@@ -621,9 +630,9 @@ class MaglevGraphBuilder {
     current_interpreter_frame_.set(dst, current_interpreter_frame_.get(src));
   }
 
-  ValueNode* GetTaggedValue(ValueNode* value,
-                            UseReprHintRecording record_use_repr_hint =
-                                UseReprHintRecording::kRecord);
+  ReduceResult GetTaggedValue(ValueNode* value,
+                              UseReprHintRecording record_use_repr_hint =
+                                  UseReprHintRecording::kRecord);
 
   ReduceResult GetSmiValue(ValueNode* value,
                            UseReprHintRecording record_use_repr_hint =
@@ -639,9 +648,9 @@ class MaglevGraphBuilder {
     return GetSmiValue(value, record_use_repr_hint);
   }
 
-  ValueNode* GetTaggedValue(interpreter::Register reg,
-                            UseReprHintRecording record_use_repr_hint =
-                                UseReprHintRecording::kRecord);
+  ReduceResult GetTaggedValue(interpreter::Register reg,
+                              UseReprHintRecording record_use_repr_hint =
+                                  UseReprHintRecording::kRecord);
 
   ReduceResult GetInternalizedString(interpreter::Register reg);
 
@@ -676,7 +685,7 @@ class MaglevGraphBuilder {
       ValueNode* node, ValueNode** constant_node = nullptr);
   std::optional<int32_t> TryGetInt32Constant(ValueNode* value);
   std::optional<uint32_t> TryGetUint32Constant(ValueNode* value);
-  std::optional<double> TryGetFloat64Constant(
+  std::optional<Float64> TryGetFloat64OrHoleyFloat64Constant(
       UseRepresentation use_repr, ValueNode* value,
       TaggedToFloat64ConversionType conversion_type);
   MaybeHandle<String> TryGetStringConstant(ValueNode* value);
@@ -701,10 +710,7 @@ class MaglevGraphBuilder {
   ValueNode* GetFloat64(ValueNode* value);
   ValueNode* GetFloat64(interpreter::Register reg);
 
-  ValueNode* GetHoleyFloat64(ValueNode* value,
-                             TaggedToFloat64ConversionType conversion_type,
-                             bool convert_hole_to_undefined,
-                             bool silence_number_nans);
+  ValueNode* GetHoleyFloat64(ValueNode* value);
 
   // Get a Float64 representation node whose value is the result of ToNumber on
   // the given node. Only trivial ToNumber is allowed -- values that are already
@@ -716,14 +722,6 @@ class MaglevGraphBuilder {
                                    NodeType allowed_input_type);
   ValueNode* GetFloat64ForToNumber(interpreter::Register reg,
                                    NodeType allowed_input_type);
-
-  ValueNode* GetHoleyFloat64ForToNumber(ValueNode* value,
-                                        NodeType allowed_input_type);
-  ValueNode* GetHoleyFloat64ForToNumber(interpreter::Register reg,
-                                        NodeType allowed_input_type) {
-    return GetHoleyFloat64ForToNumber(current_interpreter_frame_.get(reg),
-                                      allowed_input_type);
-  }
 
   ValueNode* GetAccumulator() {
     return current_interpreter_frame_.get(
@@ -748,10 +746,9 @@ class MaglevGraphBuilder {
         interpreter::Register::virtual_accumulator());
   }
 
-  ValueNode* GetAccumulatorHoleyFloat64ForToNumber(
-      NodeType allowed_input_type) {
-    return GetHoleyFloat64ForToNumber(
-        interpreter::Register::virtual_accumulator(), allowed_input_type);
+  ValueNode* GetAccumulatorFloat64ForToNumber(NodeType allowed_input_type) {
+    return GetFloat64ForToNumber(interpreter::Register::virtual_accumulator(),
+                                 allowed_input_type);
   }
 
   ReduceResult GetSilencedNaN(ValueNode* value);
@@ -767,10 +764,10 @@ class MaglevGraphBuilder {
         iterator_.GetRegisterOperand(operand_index));
   }
 
-  ValueNode* LoadRegisterHoleyFloat64ForToNumber(int operand_index,
-                                                 NodeType allowed_input_type) {
-    return GetHoleyFloat64ForToNumber(
-        iterator_.GetRegisterOperand(operand_index), allowed_input_type);
+  ValueNode* LoadRegisterFloat64ForToNumber(int operand_index,
+                                            NodeType allowed_input_type) {
+    return GetFloat64ForToNumber(iterator_.GetRegisterOperand(operand_index),
+                                 allowed_input_type);
   }
 
   template <typename NodeT>
@@ -914,6 +911,7 @@ class MaglevGraphBuilder {
   V(ArrayPrototypeValues)                      \
   V(ArrayPrototypePush)                        \
   V(ArrayPrototypePop)                         \
+  V(DataViewPrototypeGetByteLength)            \
   V(DataViewPrototypeGetInt8)                  \
   V(DataViewPrototypeSetInt8)                  \
   V(DataViewPrototypeGetInt16)                 \
@@ -1032,17 +1030,13 @@ class MaglevGraphBuilder {
   bool TargetIsCurrentCompilingUnit(compiler::JSFunctionRef target);
   ReduceResult BuildCallKnownJSFunction(
       ValueNode* context, ValueNode* function, ValueNode* new_target,
-#ifdef V8_ENABLE_LEAPTIERING
       JSDispatchHandle dispatch_handle,
-#endif
       compiler::SharedFunctionInfoRef shared,
       compiler::FeedbackCellRef feedback_cell, CallArguments& args,
       const compiler::FeedbackSource& feedback_source);
   ReduceResult BuildCallKnownJSFunction(ValueNode* context, ValueNode* function,
                                         ValueNode* new_target,
-#ifdef V8_ENABLE_LEAPTIERING
                                         JSDispatchHandle dispatch_handle,
-#endif
                                         compiler::SharedFunctionInfoRef shared,
                                         base::Vector<ValueNode*> arguments);
   MaybeReduceResult TryBuildCallKnownJSFunction(
@@ -1050,9 +1044,7 @@ class MaglevGraphBuilder {
       CallArguments& args, const compiler::FeedbackSource& feedback_source);
   MaybeReduceResult TryBuildCallKnownJSFunction(
       ValueNode* context, ValueNode* function, ValueNode* new_target,
-#ifdef V8_ENABLE_LEAPTIERING
       JSDispatchHandle dispatch_handle,
-#endif
       compiler::SharedFunctionInfoRef shared,
       compiler::FeedbackCellRef feedback_cell, CallArguments& args,
       const compiler::FeedbackSource& feedback_source);
@@ -1069,9 +1061,7 @@ class MaglevGraphBuilder {
                                     CallArguments& args, float call_frequency);
   MaybeReduceResult TryBuildInlineCall(
       ValueNode* context, ValueNode* function, ValueNode* new_target,
-#ifdef V8_ENABLE_LEAPTIERING
       JSDispatchHandle dispatch_handle,
-#endif
       compiler::SharedFunctionInfoRef shared,
       compiler::FeedbackCellRef feedback_cell, CallArguments& args,
       const compiler::FeedbackSource& feedback_source);
@@ -1086,9 +1076,7 @@ class MaglevGraphBuilder {
       CallArguments& args, const compiler::FeedbackSource& feedback_source);
   MaybeReduceResult TryReduceCallForNewClosure(
       ValueNode* target_node, ValueNode* target_context,
-#ifdef V8_ENABLE_LEAPTIERING
       JSDispatchHandle dispatch_handle,
-#endif
       compiler::SharedFunctionInfoRef shared,
       compiler::FeedbackCellRef feedback_cell, CallArguments& args,
       const compiler::FeedbackSource& feedback_source);
@@ -1130,8 +1118,8 @@ class MaglevGraphBuilder {
       compiler::MapRef map, ValueNode* length, ValueNode* elements,
       const compiler::SlackTrackingPrediction& slack_tracking_prediction,
       AllocationType allocation_type);
-  ValueNode* BuildAndAllocateJSArrayIterator(ValueNode* array,
-                                             IterationKind iteration_kind);
+  ReduceResult BuildAndAllocateJSArrayIterator(ValueNode* array,
+                                               IterationKind iteration_kind);
 
   MaybeReduceResult TryBuildAndAllocateJSGeneratorObject(ValueNode* closure,
                                                          ValueNode* receiver);
@@ -1143,19 +1131,20 @@ class MaglevGraphBuilder {
           compiler::FeedbackSource());
 
   MaybeReduceResult TryReduceConstructArrayConstructor(
-      compiler::JSFunctionRef array_function, CallArguments& args,
+      compiler::JSFunctionRef target_function, ValueNode* new_target,
+      CallArguments& args,
       compiler::OptionalAllocationSiteRef maybe_allocation_site = {});
   MaybeReduceResult TryReduceConstructBuiltin(
-      compiler::JSFunctionRef builtin,
-      compiler::SharedFunctionInfoRef shared_function_info, ValueNode* target,
-      CallArguments& args);
+      compiler::JSFunctionRef target_function,
+      compiler::SharedFunctionInfoRef target_sfi, ValueNode* target,
+      ValueNode* new_target, CallArguments& args);
   MaybeReduceResult TryReduceConstructGeneric(
       compiler::JSFunctionRef function,
       compiler::SharedFunctionInfoRef shared_function_info, ValueNode* target,
       ValueNode* new_target, CallArguments& args,
       compiler::FeedbackSource& feedback_source);
   MaybeReduceResult TryReduceConstruct(
-      compiler::HeapObjectRef feedback_target, ValueNode* target,
+      compiler::HeapObjectRef target_constant, ValueNode* target,
       ValueNode* new_target, CallArguments& args,
       compiler::FeedbackSource& feedback_source);
   ReduceResult BuildConstruct(ValueNode* target, ValueNode* new_target,
@@ -1178,7 +1167,7 @@ class MaglevGraphBuilder {
   MaybeReduceResult TryBuildGlobalLoad(
       const compiler::GlobalAccessFeedback& global_access_feedback);
 
-  bool TryBuildFindNonDefaultConstructorOrConstruct(
+  MaybeReduceResult TryBuildFindNonDefaultConstructorOrConstruct(
       ValueNode* this_function, ValueNode* new_target,
       std::pair<interpreter::Register, interpreter::Register> result);
 
@@ -1245,8 +1234,8 @@ class MaglevGraphBuilder {
 
   ReduceResult BuildLoadMap(ValueNode* object);
 
-  ValueNode* ConvertForField(ValueNode* value, const vobj::Field& desc,
-                             AllocationType allocation_type);
+  ReduceResult ConvertForField(ValueNode* value, const vobj::Field& desc,
+                               AllocationType allocation_type);
 
   void BuildInitializeStore(vobj::Field desc, InlinedAllocation* alloc,
                             AllocationType allocation_type, ValueNode* value);
@@ -1288,7 +1277,8 @@ class MaglevGraphBuilder {
   ReduceResult BuildLoadFixedDoubleArrayElement(ValueNode* elements, int index);
   ReduceResult BuildLoadFixedDoubleArrayElement(ValueNode* elements,
                                                 ValueNode* index);
-  ReduceResult BuildStoreFixedDoubleArrayElement(ValueNode* elements,
+  ReduceResult BuildStoreFixedDoubleArrayElement(ElementsKind elements_kind,
+                                                 ValueNode* elements,
                                                  ValueNode* index,
                                                  ValueNode* value);
 
@@ -1342,10 +1332,17 @@ class MaglevGraphBuilder {
   ReduceResult BuildGetKeyedProperty(
       ValueNode* object, const compiler::FeedbackSource& feedback_source,
       const compiler::ProcessedFeedback& processed_feedback);
+  ReduceResult BuildSetKeyedProperty(
+      ValueNode* object, ValueNode* index, compiler::AccessMode access_mode,
+      const compiler::FeedbackSource& feedback_source,
+      const compiler::ProcessedFeedback& processed_feedback,
+      base::FunctionRef<ReduceResult()> generic_setter);
 
   ValueNode* BuildLoadFixedArrayLength(ValueNode* fixed_array);
   ReduceResult BuildLoadJSArrayLength(ValueNode* js_array,
                                       LoadType length_type = LoadType::kSmi);
+  ReduceResult BuildLoadJSDataViewByteLength(ValueNode* js_data_view);
+  ReduceResult BuildLoadJSDataViewDataPointer(ValueNode* js_data_view);
   ReduceResult BuildLoadElements(ValueNode* object);
 
   ReduceResult BuildLoadJSFunctionFeedbackCell(ValueNode* closure);
@@ -1554,8 +1551,8 @@ class MaglevGraphBuilder {
       compiler::JSObjectRef boilerplate, AllocationType allocation,
       int max_depth, int* max_properties);
 
-  InlinedAllocation* BuildInlinedAllocation(VirtualObject* object,
-                                            AllocationType allocation);
+  ReduceResult BuildInlinedAllocation(VirtualObject* object,
+                                      AllocationType allocation);
   ValueNode* BuildInlinedArgumentsElements(int start_index, int length);
   ValueNode* BuildInlinedUnmappedArgumentsElements(int mapped_count);
 
@@ -1800,6 +1797,8 @@ class MaglevGraphBuilder {
                                                 ValueNode* node);
   BranchResult BuildBranchIfFloat64ToBooleanTrue(BranchBuilder& builder,
                                                  ValueNode* node);
+  BranchResult BuildBranchIfHoleyFloat64ToBooleanTrue(BranchBuilder& builder,
+                                                      ValueNode* node);
   BranchResult BuildBranchIfFloat64IsHole(BranchBuilder& builder,
                                           ValueNode* node);
 #ifdef V8_ENABLE_UNDEFINED_DOUBLE

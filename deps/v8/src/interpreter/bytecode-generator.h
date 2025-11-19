@@ -63,7 +63,7 @@ class BytecodeGenerator final : public AstVisitor<BytecodeGenerator> {
   }
 
 #ifdef DEBUG
-  int CheckBytecodeMatches(Tagged<BytecodeArray> bytecode);
+  int CheckBytecodeMatches(Handle<BytecodeArray> bytecode);
 #endif
 
 #define DECLARE_VISIT(type) void Visit##type(type* node);
@@ -73,13 +73,13 @@ class BytecodeGenerator final : public AstVisitor<BytecodeGenerator> {
 
   bool IsPrototypeAssignment(
       Statement* stmt, Variable** var, HoleCheckMode* hole_check_mode,
-      base::SmallVector<std::pair<const AstRawString*, Expression*>,
-                        kInitialPropertyCount>& properties,
+      SmallZoneVector<std::pair<const AstRawString*, Expression*>,
+                      kInitialPropertyCount>& properties,
       std::unordered_set<const AstRawString*>& duplicate);
 
   void VisitConsecutivePrototypeAssignments(
-      const base::SmallVector<std::pair<const AstRawString*, Expression*>,
-                              kInitialPropertyCount>& properties,
+      const SmallZoneVector<std::pair<const AstRawString*, Expression*>,
+                            kInitialPropertyCount>& properties,
       Variable* var, HoleCheckMode hole_check_mode);
   // Visiting function for declarations list and statements are overridden.
   void VisitModuleDeclarations(Declaration::List* declarations);
@@ -340,6 +340,7 @@ class BytecodeGenerator final : public AstVisitor<BytecodeGenerator> {
 
   void BuildGeneratorPrologue();
   void BuildSuspendPoint(int position);
+  void BuildGeneratorEpilogue();
 
   void BuildAwait(int position = kNoSourcePosition);
   void BuildAwait(Expression* await_expr);
@@ -533,7 +534,6 @@ class BytecodeGenerator final : public AstVisitor<BytecodeGenerator> {
                                     const AstRawString* name);
   FeedbackSlot GetDummyCompareICSlot();
 
-  int GetCachedCreateClosureSlot(FunctionLiteral* literal);
   int GetNewClosureSlot(FunctionLiteral* literal);
   void AddToEagerLiteralsIfEager(FunctionLiteral* literal);
 

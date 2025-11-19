@@ -1808,9 +1808,6 @@ class InterpreterCompareOpAssembler : public InterpreterAssembler {
         case Operation::kEqual:
           result = Equal(lhs, rhs, context, &var_type_feedback);
           break;
-        case Operation::kStrictEqual:
-          result = StrictEqual(lhs, rhs, &var_type_feedback);
-          break;
         case Operation::kLessThan:
         case Operation::kGreaterThan:
         case Operation::kLessThanOrEqual:
@@ -1840,6 +1837,40 @@ class InterpreterCompareOpAssembler : public InterpreterAssembler {
       Unreachable();
     }
   }
+
+  void CompareOpWithEmbeddedFeedback(Operation compare_op) {
+    TNode<Object> lhs = LoadRegisterAtOperandIndex(0);
+    TNode<Object> rhs = GetAccumulator();
+    TNode<Context> context = GetContext();
+
+    TVARIABLE(Smi, var_type_feedback);
+    TVARIABLE(Object, var_exception);
+    Label if_exception(this, Label::kDeferred);
+    TNode<Boolean> result;
+    {
+      ScopedExceptionHandler handler(this, &if_exception, &var_exception);
+      switch (compare_op) {
+        case Operation::kStrictEqual:
+          result = StrictEqual(lhs, rhs, &var_type_feedback);
+          break;
+
+        default:
+          UNREACHABLE();
+      }
+    }
+
+    UpdateEmbeddedFeedback(var_type_feedback.value(), 1);
+
+    SetAccumulator(result);
+    Dispatch();
+
+    BIND(&if_exception);
+    {
+      UpdateEmbeddedFeedback(var_type_feedback.value(), 1);
+      CallRuntime(Runtime::kReThrow, context, var_exception.value());
+      Unreachable();
+    }
+  }
 };
 
 // TestEqual <src>
@@ -1849,11 +1880,11 @@ IGNITION_HANDLER(TestEqual, InterpreterCompareOpAssembler) {
   CompareOpWithFeedback(Operation::kEqual);
 }
 
-// TestEqualStrict <src>
+// TestEqualStrict <src> <feedback_value>
 //
 // Test if the value in the <src> register is strictly equal to the accumulator.
 IGNITION_HANDLER(TestEqualStrict, InterpreterCompareOpAssembler) {
-  CompareOpWithFeedback(Operation::kStrictEqual);
+  CompareOpWithEmbeddedFeedback(Operation::kStrictEqual);
 }
 
 // TestLessThan <src>
@@ -3436,7 +3467,6 @@ IGNITION_HANDLER(SwitchOnGeneratorState, InterpreterAssembler) {
   // When the sandbox is enabled, the generator state must be assumed to be
   // untrusted as it is located inside the sandbox, so validate it here.
   CSA_SBXCHECK(this, UintPtrLessThan(case_value, table_length));
-  USE(table_length);  // SBXCHECK is a DCHECK when the sandbox is disabled.
 
   TNode<WordT> entry = IntPtrAdd(table_start, case_value);
   TNode<Object> constant_entry = LoadConstantPoolEntry(entry);

@@ -1245,7 +1245,7 @@ void InstructionSelector::InitializeCallBuffer(
       // immediate argument on all architectures.
 #if defined(V8_TARGET_ARCH_X64) || defined(V8_TARGET_ARCH_ARM) ||     \
     defined(V8_TARGET_ARCH_ARM64) || defined(V8_TARGET_ARCH_PPC64) || \
-    defined(V8_TARGET_ARCH_S390X)
+    defined(V8_TARGET_ARCH_S390X) || defined(V8_TARGET_ARCH_LOONG64)
       if (this->IsHeapConstant(callee)) {
         buffer->instruction_args.push_back(g.UseImmediate(callee));
         break;
@@ -3496,6 +3496,10 @@ void InstructionSelector::VisitNode(OpIndex node) {
       return VisitDebugBreak(node);
     case Opcode::kAbortCSADcheck:
       return VisitAbortCSADcheck(node);
+#ifdef V8_ENABLE_SANDBOX_HARDWARE_SUPPORT
+    case Opcode::kSwitchSandboxMode:
+      return VisitSwitchSandboxMode(node);
+#endif  // V8_ENABLE_SANDBOX_HARDWARE_SUPPORT
     case Opcode::kSelect: {
       const SelectOp& select = op.Cast<SelectOp>();
       // If there is a Select, then it should only be one that is supported by

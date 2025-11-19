@@ -974,9 +974,16 @@ void BaselineCompiler::VisitMov() {
 }
 
 void BaselineCompiler::VisitGetNamedProperty() {
-  CallBuiltin<Builtin::kLoadICBaseline>(RegisterOperand(0),  // object
-                                        Constant<Name>(1),   // name
-                                        IndexAsTagged(2));   // slot
+  if (v8_flags.sparkplug_plus) {
+    CallBuiltin<Builtin::kLoadICUninitializedBaseline>(
+        RegisterOperand(0),  // object
+        Constant<Name>(1),   // name
+        IndexAsTagged(2));   // slot
+  } else {
+    CallBuiltin<Builtin::kLoadICGenericBaseline>(RegisterOperand(0),  // object
+                                                 Constant<Name>(1),   // name
+                                                 IndexAsTagged(2));   // slot
+  }
 }
 
 void BaselineCompiler::VisitGetNamedPropertyFromSuper() {
@@ -1651,8 +1658,13 @@ void BaselineCompiler::VisitTestEqual() {
 }
 
 void BaselineCompiler::VisitTestEqualStrict() {
-  CallBuiltin<Builtin::kStrictEqual_Baseline>(
-      RegisterOperand(0), kInterpreterAccumulatorRegister, Index(1));
+  auto feedback_value_offset = BytecodeArray::kHeaderSize - kHeapObjectTag +
+                               iterator().current_offset() +
+                               iterator().current_operand_offset(1);
+
+  CallBuiltin<Builtin::kStrictEqual_Baseline>(RegisterOperand(0),
+                                              kInterpreterAccumulatorRegister,
+                                              feedback_value_offset);
 }
 
 void BaselineCompiler::VisitTestLessThan() {

@@ -20,15 +20,21 @@
 namespace v8 {
 namespace internal {
 
-RegExpMacroAssembler::RegExpMacroAssembler(Isolate* isolate, Zone* zone)
+RegExpMacroAssembler::RegExpMacroAssembler(Isolate* isolate, Zone* zone,
+                                           Mode mode)
     : slow_safe_compiler_(false),
       backtrack_limit_(JSRegExp::kNoBacktrackLimit),
       global_mode_(NOT_GLOBAL),
       isolate_(isolate),
-      zone_(zone) {}
+      zone_(zone),
+      mode_(mode) {}
 
 bool RegExpMacroAssembler::has_backtrack_limit() const {
   return backtrack_limit_ != JSRegExp::kNoBacktrackLimit;
+}
+
+int RegExpMacroAssembler::stack_limit_slack_slot_count() const {
+  return RegExpStack::kStackLimitSlackSlotCount;
 }
 
 bool RegExpMacroAssembler::CanReadUnaligned() const {

@@ -512,7 +512,6 @@ v8_config(
         "GOOGLE3",
         "V8_ADVANCED_BIGINT_ALGORITHMS",
         "V8_CONCURRENT_MARKING",
-        "V8_ENABLE_LEAPTIERING",
         "V8_ENABLE_SPARKPLUG",
         "V8_ENABLE_EXTENSIBLE_RO_SNAPSHOT",
         "V8_ENABLE_CONTINUATION_PRESERVED_EMBEDDER_DATA",
@@ -522,6 +521,18 @@ v8_config(
             "DEBUG",
             "V8_ENABLE_CHECKS",
         ],
+        "//conditions:default": [],
+    }) + select({
+        "@v8//bazel/config:asan_enabled" : [ "V8_USE_ADDRESS_SANITIZER" ],
+        "//conditions:default": [],
+    }) + select({
+        "@v8//bazel/config:hwasan_enabled" : [ "V8_USE_HWADDRESS_SANITIZER" ],
+        "//conditions:default": [],
+    }) + select({
+        "@v8//bazel/config:msan_enabled" : [ "V8_USE_MEMORY_SANITIZER" ],
+        "//conditions:default": [],
+    }) + select({
+        "@v8//bazel/config:ubsan_enabled" : [ "V8_USE_UNDEFINED_BEHAVIOR_SANITIZER" ],
         "//conditions:default": [],
     }) + select(
         {
@@ -2583,6 +2594,7 @@ filegroup(
         "src/tasks/task-utils.cc",
         "src/tasks/task-utils.h",
         "src/torque/runtime-macro-shims.h",
+        "src/tracing/perfetto-sdk.h",
         "src/tracing/trace-event.cc",
         "src/tracing/trace-event.h",
         "src/tracing/trace-event-no-perfetto.h",
@@ -2923,6 +2935,7 @@ filegroup(
             "src/maglev/maglev-pipeline-statistics.h",
             "src/maglev/maglev-post-hoc-optimizations-processors.h",
             "src/maglev/maglev-pre-regalloc-codegen-processors.h",
+            "src/maglev/maglev-range.h",
             "src/maglev/maglev-range-analysis.h",
             "src/maglev/maglev-reducer-inl.h",
             "src/maglev/maglev-reducer.h",
@@ -3247,8 +3260,8 @@ filegroup(
         "src/compiler/backend/spill-placer.cc",
         "src/compiler/backend/spill-placer.h",
         "src/compiler/backend/unwinding-info-writer.h",
-        "src/compiler/basic-block-instrumentor.cc",
-        "src/compiler/basic-block-instrumentor.h",
+        "src/compiler/basic-block-call-graph-profiler.cc",
+        "src/compiler/basic-block-call-graph-profiler.h",
         "src/compiler/branch-elimination.cc",
         "src/compiler/branch-elimination.h",
         "src/compiler/bytecode-analysis.cc",
@@ -3737,6 +3750,7 @@ filegroup(
             "src/maglev/maglev-ir.h",
             "src/maglev/maglev-ir-inl.h",
             "src/maglev/maglev-kna-processor.h",
+            "src/maglev/maglev-range.h",
             "src/maglev/maglev-range-analysis.h",
             "src/maglev/maglev-reducer-inl.h",
             "src/maglev/maglev-reducer.h",

@@ -96,7 +96,7 @@ class RecomputePhiUseHintsProcessor {
       if (!input.node()) continue;
       if (Phi* phi = input.node()->TryCast<Phi>()) {
         UseRepresentation use_repr = UseRepresentation::kTagged;
-        if (node->properties().is_conversion()) {
+        if (node->is_conversion()) {
           use_repr = UseRepresentationFromValue(
               node->Cast<ValueNode>()->value_representation());
         } else if (node->Is<ReturnedValue>()) {
@@ -104,18 +104,22 @@ class RecomputePhiUseHintsProcessor {
           while (!unwrapped->Is<ReturnedValue>()) {
             unwrapped = unwrapped->input_node(0);
           }
-          DCHECK(!unwrapped->properties().is_conversion());
+          DCHECK(!unwrapped->is_conversion());
           DCHECK(!node->Is<TruncateCheckedNumberOrOddballToInt32>());
           DCHECK(!node->Is<TruncateUnsafeNumberOrOddballToInt32>());
           DCHECK(!node->Is<TruncateUint32ToInt32>());
+          DCHECK(!node->Is<TruncateFloat64ToInt32>());
           DCHECK(!node->Is<TruncateHoleyFloat64ToInt32>());
           use_repr =
               UseRepresentationFromValue(unwrapped->value_representation());
         } else if (node->Is<TruncateUint32ToInt32>() ||
+                   node->Is<TruncateFloat64ToInt32>() ||
                    node->Is<TruncateHoleyFloat64ToInt32>() ||
                    node->Is<TruncateCheckedNumberOrOddballToInt32>() ||
                    node->Is<TruncateUnsafeNumberOrOddballToInt32>()) {
           use_repr = UseRepresentation::kTruncatedInt32;
+        } else if (node->Is<NumberToString>()) {
+          use_repr = UseRepresentation::kTaggedForNumberToString;
         }
         phi->RecordUseReprHint(UseRepresentationSet{use_repr},
                                live_loop_phis_.contains(phi));
@@ -139,6 +143,8 @@ class RecomputePhiUseHintsProcessor {
         return UseRepresentation::kInt32;
       case ValueRepresentation::kUint32:
         return UseRepresentation::kUint32;
+      case ValueRepresentation::kShiftedInt53:
+        return UseRepresentation::kShiftedInt53;
       case ValueRepresentation::kFloat64:
         return UseRepresentation::kFloat64;
       case ValueRepresentation::kHoleyFloat64:
@@ -341,16 +347,9 @@ class AnyUseMarkingProcessor {
     return ProcessResult::kContinue;
   }
 
-#ifdef DEBUG
   ProcessResult Process(Dead* node, const ProcessingState& state) {
-    if (!v8_flags.maglev_untagged_phis) {
-      // These nodes are removed in the phi representation selector, if we are
-      // running without it. Just remove it here.
-      return ProcessResult::kRemove;
-    }
-    UNREACHABLE();
+    return ProcessResult::kRemove;
   }
-#endif  // DEBUG
 
   void PostProcessGraph(Graph* graph) {
     RunEscapeAnalysis(graph);

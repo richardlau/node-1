@@ -728,21 +728,23 @@ void InstructionSelector::VisitStore(OpIndex node) {
     size_t const temp_count = arraysize(temps);
 
     InstructionCode code;
-    if (write_barrier_kind == kSkippedWriteBarrier) {
+    if (rep == MachineRepresentation::kIndirectPointer) {
+      DCHECK(write_barrier_kind == kIndirectPointerWriteBarrier ||
+             write_barrier_kind == kSkippedWriteBarrier);
+      // In this case we need to add the IndirectPointerTag as additional input.
+      code = write_barrier_kind == kSkippedWriteBarrier
+                 ? kArchStoreIndirectSkippedWriteBarrier
+                 : kArchStoreIndirectWithWriteBarrier;
+      code |= RecordWriteModeField::encode(
+          RecordWriteMode::kValueIsIndirectPointer);
+      IndirectPointerTag tag = store_view.indirect_pointer_tag();
+      inputs[input_count++] = g.UseImmediate64(static_cast<int64_t>(tag));
+    } else if (write_barrier_kind == kSkippedWriteBarrier) {
       code = kArchStoreSkippedWriteBarrier;
     } else {
       RecordWriteMode record_write_mode =
           WriteBarrierKindToRecordWriteMode(write_barrier_kind);
-      if (rep == MachineRepresentation::kIndirectPointer) {
-        DCHECK_EQ(write_barrier_kind, kIndirectPointerWriteBarrier);
-        // In this case we need to add the IndirectPointerTag as additional
-        // input.
-        code = kArchStoreIndirectWithWriteBarrier;
-        IndirectPointerTag tag = store_view.indirect_pointer_tag();
-        inputs[input_count++] = g.UseImmediate64(static_cast<int64_t>(tag));
-      } else {
-        code = kArchStoreWithWriteBarrier;
-      }
+      code = kArchStoreWithWriteBarrier;
       code |= RecordWriteModeField::encode(record_write_mode);
     }
     if (store_view.is_store_trap_on_null()) {
@@ -1951,11 +1953,9 @@ void VisitAtomicLoad(InstructionSelector* selector, OpIndex node,
 
   bool traps_on_null;
   if (load.is_protected(&traps_on_null)) {
-    // Atomic loads and null dereference are mutually exclusive. This might
-    // change with multi-threaded wasm-gc in which case the access mode should
-    // probably be kMemoryAccessProtectedNullDereference.
-    DCHECK(!traps_on_null);
-    code |= AccessModeField::encode(kMemoryAccessProtectedMemOutOfBounds);
+    code |= AccessModeField::encode(traps_on_null
+                                        ? kMemoryAccessProtectedNullDereference
+                                        : kMemoryAccessProtectedMemOutOfBounds);
   }
 
   if (g.CanBeImmediate(index, code)) {
@@ -2028,6 +2028,12 @@ void VisitAtomicStore(InstructionSelector* selector, OpIndex node,
           WriteBarrierKindToRecordWriteMode(write_barrier_kind);
       code = kArchAtomicStoreWithWriteBarrier;
       code |= RecordWriteModeField::encode(record_write_mode);
+    }
+    if (store.is_store_trap_on_null()) {
+      code |= AccessModeField::encode(kMemoryAccessProtectedNullDereference);
+    } else if (store_params.kind() ==
+               MemoryAccessKind::kProtectedByTrapHandler) {
+      code |= AccessModeField::encode(kMemoryAccessProtectedMemOutOfBounds);
     }
     selector->Emit(code, 0, nullptr, input_count, inputs, temp_count, temps);
   } else {

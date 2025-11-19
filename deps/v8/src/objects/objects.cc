@@ -560,10 +560,16 @@ MaybeDirectHandle<String> Object::NoSideEffectsToMaybeString(
     Isolate* isolate, DirectHandle<Object> input) {
   DisallowJavascriptExecution no_js(isolate);
 
-  if (IsString(*input) || IsNumber(*input) || IsOddball(*input)) {
+  if (IsAnyHole(*input, isolate)) {
+    ReadOnlyRoots roots(isolate);
+#define HOLE_CASE(CamelName, snake_name, _) \
+  if (Is##CamelName(*input))                \
+    return isolate->factory()->NewStringFromAsciiChecked(#CamelName);
+    HOLE_LIST(HOLE_CASE)
+#undef HOLE_CASE
+    UNREACHABLE();
+  } else if (IsString(*input) || IsNumber(*input) || IsOddball(*input)) {
     return Object::ToString(isolate, input).ToHandleChecked();
-  } else if (IsTerminationException(*input)) {
-    return isolate->factory()->NewStringFromStaticChars("TerminationException");
   } else if (IsJSProxy(*input)) {
     DirectHandle<Object> currInput = input;
     do {
@@ -758,11 +764,11 @@ template <typename IsolateT>
 bool Object::BooleanValue(Tagged<Object> obj, IsolateT* isolate) {
   if (IsSmi(obj)) return Smi::ToInt(obj) != 0;
   DCHECK(IsHeapObject(obj));
+#ifdef V8_ENABLE_WEBASSEMBLY
+  DCHECK(!IsWasmNull(obj));
+#endif
   if (IsBoolean(obj)) return IsTrue(obj, isolate);
   if (IsNullOrUndefined(obj, isolate)) return false;
-#ifdef V8_ENABLE_WEBASSEMBLY
-  if (IsWasmNull(obj)) return false;
-#endif
   if (IsUndetectable(obj)) return false;  // Undetectable object is false.
   if (IsString(obj)) return Cast<String>(obj)->length() != 0;
   if (IsHeapNumber(obj)) return DoubleToBoolean(Cast<HeapNumber>(obj)->value());
@@ -1527,15 +1533,14 @@ MaybeHandle<JSAny> Object::GetPropertyWithAccessor(LookupIterator* it) {
                                  Object::ConvertReceiver(isolate, receiver));
     }
 
-    PropertyCallbackArguments args(isolate, info->data(), *receiver, *holder,
+    PropertyCallbackArguments args(isolate, *info, *receiver, *holder,
                                    Just(kDontThrow));
-    DirectHandle<JSAny> result = args.CallAccessorGetter(info, name);
+    DirectHandle<JSAny> result = args.CallAccessorGetter(name);
     RETURN_EXCEPTION_IF_EXCEPTION(isolate);
     Handle<JSAny> reboxed_result(*result, isolate);
     if (info->replace_on_access() && IsJSReceiver(*receiver)) {
-      RETURN_ON_EXCEPTION(isolate,
-                          Accessors::ReplaceAccessorWithDataProperty(
-                              isolate, receiver, holder, name, result));
+      RETURN_ON_EXCEPTION(isolate, Accessors::ReplaceAccessorWithDataProperty(
+                                       isolate, holder, name, result));
     }
     return reboxed_result;
   }
@@ -1597,9 +1602,9 @@ Maybe<bool> Object::SetPropertyWithAccessor(
                                  Object::ConvertReceiver(isolate, receiver));
     }
 
-    PropertyCallbackArguments args(isolate, info->data(), *receiver, *holder,
+    PropertyCallbackArguments args(isolate, *info, *receiver, *holder,
                                    maybe_should_throw);
-    bool result = args.CallAccessorSetter(info, name, value);
+    bool result = args.CallAccessorSetter(name, value);
     RETURN_VALUE_IF_EXCEPTION(isolate, Nothing<bool>());
     // Ensure the setter callback respects the "should throw" value - it's
     // allowed to fail without throwing only in case of kDontThrow.
@@ -3956,9 +3961,9 @@ void DescriptorArray::CopyFrom(InternalIndex index,
   Set(index, src->GetKey(index), src->GetValue(index), details);
 }
 
-void DescriptorArray::Sort() {
+void DescriptorArray::SortImpl(const int len) {
   // In-place heap sort.
-  const int len = number_of_descriptors();
+  DCHECK_EQ(len, number_of_descriptors());
   // Reset sorting since the descriptor array might contain invalid pointers.
   for (int i = 0; i < len; ++i) SetSortedKey(i, i);
   // Bottom-up max-heap construction.

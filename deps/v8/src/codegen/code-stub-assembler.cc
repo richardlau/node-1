@@ -2015,7 +2015,6 @@ TNode<Code> CodeStubAssembler::LoadCodePointerFromObject(
       object, field_offset, kCodeIndirectPointerTag));
 }
 
-#ifdef V8_ENABLE_LEAPTIERING
 
 TNode<UintPtrT> CodeStubAssembler::ComputeJSDispatchTableEntryOffset(
     TNode<JSDispatchHandleT> handle) {
@@ -2043,16 +2042,7 @@ TNode<Code> CodeStubAssembler::LoadCodeObjectFromJSDispatchTable(
   TNode<UintPtrT> shifted_value;
   if (JSDispatchEntry::kObjectPointerOffset == 0) {
     shifted_value =
-#if defined(__illumos__) && defined(V8_HOST_ARCH_64_BIT)
-    // Pointers in illumos span both the low 2^47 range and the high 2^47 range
-    // as well. Checking the high bit being set in illumos means all higher bits
-    // need to be set to 1 after shifting right.
-    // Use WordSar() so any high-bit check wouldn't be necessary.
-        UncheckedCast<UintPtrT>(WordSar(UncheckedCast<IntPtrT>(value),
-            IntPtrConstant(JSDispatchEntry::kObjectPointerShift)));
-#else
         WordShr(value, UintPtrConstant(JSDispatchEntry::kObjectPointerShift));
-#endif /* __illumos__ and 64-bit */
   } else {
     shifted_value = UintPtrAdd(
         WordShr(value, UintPtrConstant(JSDispatchEntry::kObjectPointerShift)),
@@ -2075,7 +2065,6 @@ TNode<Uint16T> CodeStubAssembler::LoadParameterCountFromJSDispatchTable(
   return Load<Uint16T>(table, offset);
 }
 
-#endif  // V8_ENABLE_LEAPTIERING
 
 void CodeStubAssembler::TailCallJSCode(
     TNode<Code> code, TNode<Context> context, TNode<JSFunction> function,
@@ -2099,12 +2088,7 @@ void CodeStubAssembler::TailCallJSCode(
     TNode<Context> context, TNode<JSFunction> function,
     TNode<Object> new_target, TNode<Int32T> arg_count,
     TNode<JSDispatchHandleT> dispatch_handle) {
-#ifdef V8_ENABLE_LEAPTIERING
   TNode<Code> code = LoadCodeObjectFromJSDispatchTable(dispatch_handle);
-#else
-  TNode<Code> code =
-      LoadCodePointerFromObject(function, JSFunction::kCodeOffset);
-#endif  // V8_ENABLE_LEAPTIERING
 
   CodeAssembler::TailCallJSCode(code, context, function, new_target, arg_count,
                                 dispatch_handle);
@@ -2215,15 +2199,8 @@ TNode<RawPtrT> CodeStubAssembler::LoadCodePointerTableBase() {
 void CodeStubAssembler::SetSupportsDynamicParameterCount(
     TNode<JSFunction> callee, TNode<JSDispatchHandleT> dispatch_handle) {
   TNode<Uint16T> dynamic_parameter_count;
-#ifdef V8_ENABLE_LEAPTIERING
   dynamic_parameter_count =
       LoadParameterCountFromJSDispatchTable(dispatch_handle);
-#else
-  // TODO(olivf): Remove once leaptiering is supported everywhere.
-  TNode<SharedFunctionInfo> shared = LoadJSFunctionSharedFunctionInfo(callee);
-  dynamic_parameter_count =
-      LoadSharedFunctionInfoFormalParameterCountWithReceiver(shared);
-#endif
   SetDynamicJSParameterCount(dynamic_parameter_count);
 }
 
@@ -10151,6 +10128,44 @@ TNode<JSReceiver> CodeStubAssembler::ToObject_Inline(TNode<Context> context,
   return result.value();
 }
 
+TNode<JSReceiver> CodeStubAssembler::ConvertReceiver(TNode<Context> context,
+                                                     TNode<Object> input) {
+  TVARIABLE(JSReceiver, result);
+  Label if_isreceiver(this), if_null_or_undefined(this),
+      if_isnotreceiver(this, Label::kDeferred);
+  Label done(this);
+
+  BranchIfJSReceiver(input, &if_isreceiver, &if_isnotreceiver);
+
+  BIND(&if_isreceiver);
+  {
+    result = CAST(input);
+    Goto(&done);
+  }
+
+  BIND(&if_isnotreceiver);
+  {
+    GotoIf(IsUndefined(input), &if_null_or_undefined);
+    GotoIf(IsNull(input), &if_null_or_undefined);
+
+    result = ToObject(context, input);
+    Goto(&done);
+  }
+
+  BIND(&if_null_or_undefined);
+  {
+    TNode<NativeContext> native_context = LoadNativeContext(context);
+    TNode<JSGlobalProxy> global_proxy = CAST(
+        LoadContextElementNoCell(native_context, Context::GLOBAL_PROXY_INDEX));
+
+    result = global_proxy;
+    Goto(&done);
+  }
+
+  BIND(&done);
+  return result.value();
+}
+
 TNode<Number> CodeStubAssembler::ToLength_Inline(TNode<Context> context,
                                                  TNode<Object> input) {
   TNode<Smi> smi_zero = SmiConstant(0);
@@ -11853,10 +11868,10 @@ void CodeStubAssembler::Lookup(TNode<Name> unique_name, TNode<Array> array,
   }
   GotoIf(Word32Equal(number_of_valid_entries, Int32Constant(0)), if_not_found);
   Label linear_search(this), binary_search(this);
-  const int kMaxElementsForLinearSearch = 32;
-  Branch(Uint32LessThanOrEqual(number_of_valid_entries,
-                               Int32Constant(kMaxElementsForLinearSearch)),
-         &linear_search, &binary_search);
+  Branch(
+      Uint32LessThanOrEqual(number_of_valid_entries,
+                            Int32Constant(Array::kMaxElementsForLinearSearch)),
+      &linear_search, &binary_search);
   BIND(&linear_search);
   {
     LookupLinear<Array>(unique_name, array, number_of_valid_entries, if_found,
@@ -13297,6 +13312,34 @@ void CodeStubAssembler::ReportFeedbackUpdate(
   CallRuntime(Runtime::kTraceUpdateFeedback, NoContextConstant(),
               feedback_vector, SmiTag(Signed(slot_id)), StringConstant(reason));
 #endif  // V8_TRACE_FEEDBACK_UPDATES
+}
+
+void CodeStubAssembler::UpdateEmbeddedFeedback(
+    TNode<Int32T> feedback, TNode<BytecodeArray> bytecode_array,
+    TNode<IntPtrT> feedback_offset) {
+  Label end(this);
+
+  TNode<Int32T> previous_feedback =
+      Load<Uint16T>(bytecode_array, feedback_offset);
+  TNode<Int32T> combined_feedback = Word32Or(previous_feedback, feedback);
+
+  GotoIf(Word32Equal(previous_feedback, combined_feedback), &end);
+  {
+#ifdef V8_ENABLE_SANDBOX_HARDWARE_SUPPORT
+    // manually ExitSandbox() to modify BytecodeArray
+    ExitSandbox();
+#endif
+
+    StoreNoWriteBarrier(MachineRepresentation::kWord16, bytecode_array,
+                        feedback_offset, combined_feedback);
+
+#ifdef V8_ENABLE_SANDBOX_HARDWARE_SUPPORT
+    EnterSandbox();
+#endif
+    Goto(&end);
+  }
+
+  BIND(&end);
 }
 
 void CodeStubAssembler::OverwriteFeedback(TVariable<Smi>* existing_feedback,
@@ -17468,6 +17511,8 @@ ForOfNextResult CodeStubAssembler::ForOfNextHelper(TNode<Context> context,
     TNode<Smi> length = LoadFastJSArrayLength(iterated_array);
     TNode<Number> current_index = LoadObjectField<Number>(
         array_iterator, JSArrayIterator::kNextIndexOffset);
+    GotoIf(TaggedIsNotSmi(current_index), &reach_end);
+
     TNode<Smi> smi_index = CAST(current_index);
     GotoIf(SmiGreaterThanOrEqual(smi_index, length), &reach_end);
 
@@ -18205,7 +18250,6 @@ TNode<Code> CodeStubAssembler::LoadBuiltin(TNode<Smi> builtin_id) {
   return CAST(BitcastWordToTagged(Load<RawPtrT>(table, offset)));
 }
 
-#ifdef V8_ENABLE_LEAPTIERING
 
 TNode<JSDispatchHandleT> CodeStubAssembler::LoadBuiltinDispatchHandle(
     RootIndex idx) {
@@ -18230,7 +18274,6 @@ TNode<JSDispatchHandleT> CodeStubAssembler::LoadBuiltinDispatchHandle(
 }
 #endif  // V8_STATIC_DISPATCH_HANDLES_BOOL
 
-#endif  // V8_ENABLE_LEAPTIERING
 
 void CodeStubAssembler::DispatchOnInstanceType(
     TNode<Object> value, TVariable<Uint16T>* type_out, Label* if_default,
@@ -18463,7 +18506,6 @@ TNode<JSFunction> CodeStubAssembler::AllocateRootFunctionWithContext(
   // builtin id, so there's no need to use
   // CodeStubAssembler::GetSharedFunctionInfoCode().
   DCHECK(sfi->HasBuiltinId());
-#ifdef V8_ENABLE_LEAPTIERING
   const TNode<JSDispatchHandleT> dispatch_handle =
       LoadBuiltinDispatchHandle(function);
   CSA_DCHECK(this,
@@ -18472,10 +18514,6 @@ TNode<JSFunction> CodeStubAssembler::AllocateRootFunctionWithContext(
   StoreObjectFieldNoWriteBarrier(fun, JSFunction::kDispatchHandleOffset,
                                  dispatch_handle);
   USE(sfi);
-#else
-  const TNode<Code> code = LoadBuiltin(SmiConstant(sfi->builtin_id()));
-  StoreCodePointerFieldNoWriteBarrier(fun, JSFunction::kCodeOffset, code);
-#endif  // V8_ENABLE_LEAPTIERING
 
   return CAST(fun);
 }
