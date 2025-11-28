@@ -169,3 +169,13 @@ launch.json
 /third_party/fp16/src/*
 !/third_party/fp16/src/include
 !/third_party/simdutf
+!/third_party/libc++
+/third_party/libc++/src/*
+!/third_party/libc++/src/*.*
+/third_party/libc++/src/.*
+!/third_party/libc++/src/src
+!/third_party/libc++abi
+/third_party/libc++abi/src/*
+!/third_party/libc++abi/src/*.*
+/third_party/libc++abi/src/.*
+!/third_party/libc++abi/src/src
