@@ -33,9 +33,10 @@ if (spawnSync('strace').error !== undefined) {
   // stderr is the default for strace
   const rl = createInterface({ input: strace.stderr });
   rl.on('line', common.mustCallAtLeast((line) => {
-    if (!line.startsWith('open')) {
+    if (!line.includes('open')) {
       return;
     }
+    console.warn(line);
 
     const file = line.match(/"(.*?)"/)[1];
     // skip .so reading attempt
