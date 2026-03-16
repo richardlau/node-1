@@ -15,6 +15,11 @@
        'sources': [
          '<@(simdjson_sources)',
        ],
+       'conditions': [
+         ['OS=="aix" or OS=="os400"', {
+          'cflags': [ '-mcpu=power9' ],
+         }],
+       ],
      },
   ]
 }
