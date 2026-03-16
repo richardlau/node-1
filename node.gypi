@@ -84,7 +84,7 @@
     }, { # POSIX
       'defines': [ '__POSIX__' ],
     }],
-    [ 'OS=="aix" or OS=="os400", {
+    [ 'OS=="aix" or OS=="os400"', {
       'cflags': [ '-mcpu=power9' ],
     }],
     [ 'node_enable_d8=="true"', {
