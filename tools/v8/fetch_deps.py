@@ -24,6 +24,7 @@ GCLIENT_SOLUTION = [
     "deps_file"   : "DEPS",
     "managed"     : False,
     "custom_deps" : {
+      "v8/third_party/depot_tools"            : "fe6a359a803f55829ede3666215d080f6775f173",
       # These deps are already part of Node.js.
       "v8/base/trace_event/common"            : None,
       "v8/third_party/abseil-cpp"             : None,
