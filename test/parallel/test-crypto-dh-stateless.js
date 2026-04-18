@@ -5,7 +5,22 @@ if (!common.hasCrypto)
 
 const assert = require('assert');
 const crypto = require('crypto');
-const { hasOpenSSL3 } = require('../common/crypto');
+const { hasOpenSSL } = require('../common/crypto');
+
+// Error code for a key-type mismatch during (EC)DH. The underlying OpenSSL
+// error code varies by version, and in OpenSSL 4.0 by platform: some builds
+// report a generic internal error instead of a typed key-type mismatch.
+// https://github.com/openssl/openssl/issues/30895
+// TODO(panva): Tighten this check once/if fixed.
+let keyTypeMismatchCode;
+if (hasOpenSSL(4, 0)) {
+  keyTypeMismatchCode =
+    /^ERR_OSSL_EVP_(OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE|INTERNAL_ERROR)$/;
+} else if (hasOpenSSL(3)) {
+  keyTypeMismatchCode = 'ERR_OSSL_EVP_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE';
+} else {
+  keyTypeMismatchCode = 'ERR_OSSL_EVP_DIFFERENT_KEY_TYPES';
+}
 
 assert.throws(() => crypto.diffieHellman(), {
   name: 'TypeError',
@@ -151,7 +166,7 @@ const list = [
 
 // TODO(danbev): Take a closer look if there should be a check in OpenSSL3
 // when the dh parameters differ.
-if (!hasOpenSSL3) {
+if (!hasOpenSSL(3)) {
   // Same primes, but different generator.
   list.push([{ group: 'modp5' }, { prime: group.getPrime(), generator: 5 }]);
   // Same generator, but different primes.
@@ -162,7 +177,7 @@ for (const [params1, params2] of list) {
   assert.throws(() => {
     test(crypto.generateKeyPairSync('dh', params1),
          crypto.generateKeyPairSync('dh', params2));
-  }, hasOpenSSL3 ? {
+  }, hasOpenSSL(3) ? {
     name: 'Error',
     code: 'ERR_OSSL_MISMATCHING_DOMAIN_PARAMETERS'
   } : {
@@ -221,7 +236,7 @@ const not256k1 = crypto.getCurves().find((c) => /^sec.*(224|384|512)/.test(c));
 assert.throws(() => {
   test(crypto.generateKeyPairSync('ec', { namedCurve: 'secp256k1' }),
        crypto.generateKeyPairSync('ec', { namedCurve: not256k1 }));
-}, hasOpenSSL3 ? {
+}, hasOpenSSL(3) ? {
   name: 'Error',
   code: 'ERR_OSSL_MISMATCHING_DOMAIN_PARAMETERS'
 } : {
