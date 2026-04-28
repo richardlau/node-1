@@ -1182,7 +1182,8 @@ endif
 		--tag=$(TAG) \
 		--release-urlbase=$(RELEASE_URLBASE) \
 		$(CONFIG_FLAGS) $(BUILD_RELEASE_FLAGS)
-	arch -x86_64 $(MAKE) install V=$(V) DESTDIR=$(MACOSOUTDIR)/dist/x64/node
+	CARGO_BUILD_TARGET="x86_64-apple-darwin" \
+		arch -x86_64 $(MAKE) install V=$(V) DESTDIR=$(MACOSOUTDIR)/dist/x64/node
 	SIGN="$(CODESIGN_CERT)" PKGDIR="$(MACOSOUTDIR)/dist/x64/node/usr/local" sh \
 		tools/osx-codesign.sh
 	$(PYTHON) ./configure \
