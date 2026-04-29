@@ -113,6 +113,11 @@
       'dependencies': [
         'node_crates',
       ],
+      # hack
+      'copies': {
+        'destination': '<(node_crates_libpath)',
+        'files': [ '<(SHARED_INTERMEDIATE_DIR)/x86_64-apple-darwin/release/<(STATIC_LIB_PREFIX)node_crates<(STATIC_LIB_SUFFIX)' ]
+      },
       'direct_dependent_settings': {
         'include_dirs': [
           '<(cargo_vendor_dir)/temporal_capi/bindings/cpp',
