@@ -61,6 +61,10 @@ def get_target(os_name, target_arch):
         if os_name == 'linux':
             return ('POWERPC', 'powerpc')
 
+    if target_arch == 's390x':
+        if os_name == 'linux':
+            return ('S390', 's390')
+
     raise ValueError(f'Unsupported libffi target {os_name}/{target_arch}.')
 
 
@@ -244,6 +248,7 @@ def detect_target_arch():
         'mips': 'mips',
         'mipsel': 'mipsel',
         'mips64el': 'mips64el',
+        's390x': 's390x',
     }
 
     for candidate in candidates:
