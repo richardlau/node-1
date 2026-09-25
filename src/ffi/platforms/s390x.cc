@@ -38,7 +38,7 @@ uint16_t Br(unsigned r2) {
 }
 
 uint64_t Lgrl(unsigned r1, int imm) {
-  return 0xc40800000000ull | (static_cast<uint64_t>(r1) << 36) |
+  return 0xc40800000000ull | (static_cast<uint64_t>(r1) << 32) |
          (static_cast<uint32_t>(imm));
 }
 
