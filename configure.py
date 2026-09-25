@@ -2420,6 +2420,9 @@ def bundled_ffi_supported(os_name, target_arch):
   if target_arch == 'ppc64':
     return os_name in {'aix', 'freebsd', 'linux', 'mac', 'openbsd'}
 
+  if target_arch == 's390x':
+    return os_name in {'linux'}
+
   return False
 
 def configure_ffi(o):

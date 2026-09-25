@@ -147,6 +147,14 @@
             ],
           },
         }],
+        ['target_arch == "s390x" and OS == "linux"', {
+          'variables': {
+            'libffi_arch_sources': [
+              'src/s390/ffi.c',
+              'src/s390/sysv.S',
+            ],
+          },
+        }],
       ],
     }],
   ],
@@ -184,6 +192,7 @@
             'src/mips/ffitarget.h',
             'src/powerpc/ffitarget.h',
             'src/riscv/ffitarget.h',
+            'src/s390/ffitarget.h',
             'src/x86/ffitarget.h',
           ],
           'outputs': [
